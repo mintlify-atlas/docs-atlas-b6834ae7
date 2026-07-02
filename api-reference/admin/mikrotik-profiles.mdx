@@ -1,0 +1,222 @@
+---
+title: "MikroTik Hotspot Profile Endpoints"
+sidebarTitle: "MikroTik Profiles"
+description: "Retrieve real Hotspot profiles from a connected MikroTik router and test the API connection. Used to map profiles to products."
+---
+
+Before you can create a product, you need to know which Hotspot profiles are configured on your MikroTik router. These two endpoints connect **in real time** to the physical router via the MikroTik API protocol and return the profiles that exist on the device, or verify that the connection itself is working.
+
+All endpoints require `Authorization: Bearer <session_token>` for a `cliente_admin` user.
+
+<Note>
+  These endpoints establish a **live connection** to the physical MikroTik router at request time. Response times depend on the router's network latency. Ensure the router is online and its API port (default `8728`) is reachable from the API server before calling these endpoints.
+</Note>
+
+---
+
+## GET /api/v1/admin/routers/{router_id}/mikrotik-profiles
+
+Connects to the specified MikroTik router and returns all configured Hotspot profiles. The returned profile IDs (e.g. `"*003"`) and names are what you need to supply when [creating a product](/api-reference/admin/products).
+
+Pre-flight checks performed before connecting:
+- The router must exist and belong to the authenticated company.
+- The router must have `activo = true`.
+- The router must have `host`, `usuario`, and `password_encrypted` set.
+
+```bash cURL
+curl -X GET "https://api.example.com/api/v1/admin/routers/RTR_A1B2C3D4/mikrotik-profiles" \
+  -H "Authorization: Bearer <session_token>"
+```
+
+### Path Parameters
+
+<ParamField path="router_id" type="string" required>
+  The router ID to connect to, e.g. `RTR_A1B2C3D4`. Must belong to the authenticated company.
+</ParamField>
+
+### Response
+
+Returns an array of `PerfilMikrotikResponse` objects. An empty array (`[]`) is returned if the router has no Hotspot profiles configured.
+
+<ResponseField name="id" type="string" required>
+  MikroTik internal profile identifier. This is the `.id` field from the RouterOS Hotspot profile resource, formatted as `"*XXX"` (e.g. `"*003"`). Use this value as `perfil_mikrotik_id` when creating products.
+</ResponseField>
+
+<ResponseField name="name" type="string" required>
+  Human-readable profile name as configured on the router (e.g. `"1_Semana_tiempo_corrido"`, `"1_Dia"`). Use this value as `perfil_mikrotik_nombre` when creating products.
+</ResponseField>
+
+<ResponseField name="session_timeout" type="string">
+  Maximum session duration. MikroTik time format, e.g. `"7d"` (7 days), `"1d"` (1 day), `"2h"` (2 hours). `null` if not set on the profile.
+</ResponseField>
+
+<ResponseField name="idle_timeout" type="string">
+  Duration of inactivity before the session is terminated, e.g. `"10m"`. `null` if not set.
+</ResponseField>
+
+<ResponseField name="keepalive_timeout" type="string">
+  How long the router waits for keepalive pings before dropping the session. `null` if not set.
+</ResponseField>
+
+<ResponseField name="status_autorefresh" type="string">
+  Interval for the captive portal status page to auto-refresh, e.g. `"1m"`. `null` if not set.
+</ResponseField>
+
+<ResponseField name="shared_users" type="string">
+  Maximum simultaneous logins allowed per user account on this profile. `null` if not restricted.
+</ResponseField>
+
+<ResponseField name="rate_limit" type="string">
+  Bandwidth limit in MikroTik format: `"RX/TX"`, e.g. `"10M/10M"` (10 Mbps download / 10 Mbps upload). `null` if no limit is configured.
+</ResponseField>
+
+<ResponseField name="address_list" type="string">
+  MikroTik address list this profile's users are added to. `null` if not set.
+</ResponseField>
+
+<ResponseField name="mac_cookie_timeout" type="string">
+  Duration for MAC address cookie validity, e.g. `"3d"`. `null` if not set.
+</ResponseField>
+
+```json Example Response
+[
+  {
+    "id": "*003",
+    "name": "1_Semana_tiempo_corrido",
+    "session_timeout": "7d",
+    "idle_timeout": null,
+    "keepalive_timeout": null,
+    "status_autorefresh": "1m",
+    "shared_users": "1",
+    "rate_limit": "10M/10M",
+    "address_list": null,
+    "mac_cookie_timeout": "3d"
+  },
+  {
+    "id": "*002",
+    "name": "1_Dia",
+    "session_timeout": "1d",
+    "idle_timeout": "30m",
+    "keepalive_timeout": null,
+    "status_autorefresh": null,
+    "shared_users": "1",
+    "rate_limit": "5M/5M",
+    "address_list": null,
+    "mac_cookie_timeout": null
+  },
+  {
+    "id": "*001",
+    "name": "default",
+    "session_timeout": null,
+    "idle_timeout": null,
+    "keepalive_timeout": null,
+    "status_autorefresh": null,
+    "shared_users": null,
+    "rate_limit": null,
+    "address_list": null,
+    "mac_cookie_timeout": null
+  }
+]
+```
+
+### Error Responses
+
+| Status | Detail |
+|--------|--------|
+| `400`  | `"El router está inactivo. Actívalo primero desde el panel."` |
+| `400`  | `"El router no tiene credenciales configuradas completas (host, usuario, contraseña)"` |
+| `404`  | `"Router no encontrado o no pertenece a tu empresa"` |
+| `500`  | `"Error al conectar con el router MikroTik: <error detail>"` — the router is unreachable, credentials are wrong, or the API port is blocked |
+
+---
+
+## GET /api/v1/admin/routers/{router_id}/test-connection
+
+Tests the MikroTik API connection for the specified router without requiring the router to be `activo`. Returns connection success/failure status, the number of Hotspot profiles found, and the router's identity name as reported by RouterOS.
+
+This endpoint is intended for troubleshooting and for the router configuration UI to confirm credentials are valid before saving.
+
+```bash cURL
+curl -X GET "https://api.example.com/api/v1/admin/routers/RTR_A1B2C3D4/test-connection" \
+  -H "Authorization: Bearer <session_token>"
+```
+
+### Path Parameters
+
+<ParamField path="router_id" type="string" required>
+  The router ID to test, e.g. `RTR_A1B2C3D4`. Must belong to the authenticated company.
+</ParamField>
+
+### Response
+
+This endpoint always returns HTTP 200 — connection failures are reported in the response body rather than as HTTP error codes.
+
+<ResponseField name="success" type="boolean" required>
+  `true` if the MikroTik API connection was established successfully, `false` otherwise.
+</ResponseField>
+
+<ResponseField name="message" type="string" required>
+  Human-readable summary: `"Conexión exitosa"` or `"Error de conexión"`.
+</ResponseField>
+
+<ResponseField name="router" type="object" required>
+  <Expandable title="router object fields">
+    <ResponseField name="id" type="string">Router ID from the database.</ResponseField>
+    <ResponseField name="nombre" type="string">Router display name.</ResponseField>
+    <ResponseField name="host" type="string">IP address or hostname used for the connection attempt.</ResponseField>
+    <ResponseField name="puerto" type="integer">Port used for the connection attempt.</ResponseField>
+    <ResponseField name="activo" type="boolean">Current active state of the router.</ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="perfiles_encontrados" type="integer">
+  Number of Hotspot profiles returned by the router. `0` if the connection failed or no profiles exist.
+</ResponseField>
+
+<ResponseField name="router_name" type="string">
+  The RouterOS system identity name (e.g. `"MikroTik-Lobby"`). Only present on successful connections.
+</ResponseField>
+
+<ResponseField name="error" type="string">
+  Error detail string when `success` is `false`. `null` on success.
+</ResponseField>
+
+<ResponseField name="timestamp" type="string (ISO 8601)">
+  Server-side timestamp of when the test was performed.
+</ResponseField>
+
+```json Successful Connection
+{
+  "success": true,
+  "message": "Conexión exitosa",
+  "router": {
+    "id": "RTR_A1B2C3D4",
+    "nombre": "Router Principal",
+    "host": "192.168.88.1",
+    "puerto": 8728,
+    "activo": true
+  },
+  "perfiles_encontrados": 3,
+  "router_name": "MikroTik-Lobby",
+  "error": null,
+  "timestamp": "2025-01-15T14:32:10.456789"
+}
+```
+
+```json Failed Connection
+{
+  "success": false,
+  "message": "Error de conexión",
+  "router": {
+    "id": "RTR_A1B2C3D4",
+    "nombre": "Router Principal",
+    "host": "192.168.88.1",
+    "puerto": 8728,
+    "activo": true
+  },
+  "perfiles_encontrados": 0,
+  "router_name": null,
+  "error": "Connection refused to 192.168.88.1:8728",
+  "timestamp": "2025-01-15T14:32:15.123456"
+}
+```

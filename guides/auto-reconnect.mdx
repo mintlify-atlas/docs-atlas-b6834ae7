@@ -1,0 +1,232 @@
+---
+title: "Auto-Connection and MAC Cookie Injection for Hotspot"
+sidebarTitle: "Auto-Reconnect"
+description: "How Pagos Hotspot API injects MAC cookies into MikroTik to silently reconnect returning customers, including support for random MAC address rotation."
+---
+
+Modern mobile devices and laptops increasingly use **randomized MAC addresses** — a privacy feature that generates a new hardware address each time the device joins a network. For a MikroTik hotspot that ties credentials to a MAC, this breaks returning customers who have already paid: their device appears as a brand-new, unknown client. The Pagos Hotspot API solves this at two points in the flow: at initial purchase (auto-connect) and on every subsequent visit (auto-reconnect), using MikroTik MAC cookies and dynamically cloned user entries.
+
+---
+
+## The Problem: Random MAC Rotation
+
+When a customer pays for access, their MAC address is recorded. On the next visit, if the operating system has rotated the MAC, MikroTik does not recognize the device. The customer is shown the captive portal again and must log in manually — or, worse, repurchase access.
+
+The API handles this with two complementary mechanisms:
+
+- **At purchase time**: inject a MAC cookie immediately if `auto_connect: true` is set.
+- **On return**: call `POST /api/v1/hotspot/auto-reconnect` with the stored credentials and the new MAC.
+
+<Tip>
+  Always include `mac_address` and set `auto_connect: true` in the initial purchase request. Capturing the MAC at purchase time gives the best possible auto-connect success rate and seeds the cookie before the customer ever navigates away from the portal.
+</Tip>
+
+---
+
+## Auto-Connection at Purchase Time
+
+To trigger auto-connection immediately after a successful payment, include `auto_connect: true`, `mac_address`, and optionally `ip_address` in the purchase payload:
+
+```json
+{
+  "product_id": 3,
+  "card_token": "tok_test_xxxxxxxxx",
+  "customer_name": "Ana López",
+  "customer_email": "ana@example.com",
+  "mac_address": "AA:BB:CC:DD:EE:FF",
+  "ip_address": "192.168.88.100",
+  "auto_connect": true
+}
+```
+
+The response includes an `auto_conexion` block with one of two definitive states:
+
+| `estado` | Meaning |
+|---|---|
+| `"conectado"` | The device was found in MikroTik's active sessions table. Internet access is live. |
+| `"no_conectado"` | The login was attempted but the session could not be verified. Show credentials for manual login. |
+
+```json
+{
+  "auto_conexion": {
+    "estado": "conectado",
+    "mac": "AA:BB:CC:DD:EE:FF",
+    "ip": "192.168.88.100",
+    "mensaje": "¡Conexión establecida con éxito! Disfrute de Internet sin límites",
+    "verificado": true,
+    "session_id": "active-session-id"
+  }
+}
+```
+
+Auto-connection is **not possible** when:
+- `mac_address` is missing from the request.
+- The device's MAC is not in MikroTik's `/ip/hotspot/host` table (the device hasn't associated to the AP yet).
+- The router is unreachable from the API server.
+
+---
+
+## Auto-Reconnect for Returning Users
+
+When a returning customer opens the captive portal with a potentially rotated MAC, the portal should call the auto-reconnect endpoint before showing the purchase UI.
+
+### Endpoint
+
+```http
+POST /api/v1/hotspot/auto-reconnect
+X-API-Key: jwt_eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+Content-Type: application/json
+```
+
+### `AutoReconnectRequest` Schema
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `username` | `string` | ✅ | The hotspot username saved in `localStorage` |
+| `password` | `string` | ✅ | The hotspot password (can be empty for PIN-only users) |
+| `stored_mac` | `string` | ❌ | The MAC address saved when the user first purchased |
+| `current_mac` | `string` | ✅ | The device's current MAC address |
+| `current_ip` | `string` | ❌ | The device's current IP address |
+| `current_ssid` | `string` | ❌ | The SSID the device is currently connected to |
+
+**Example request:**
+
+```json
+{
+  "username": "AB3C9D",
+  "password": "1234",
+  "stored_mac": "AA:BB:CC:DD:EE:FF",
+  "current_mac": "11:22:33:44:55:66",
+  "current_ip": "192.168.88.115",
+  "current_ssid": "WiFi-Hotspot"
+}
+```
+
+---
+
+## The Reconnect Flow
+
+<Steps>
+  <Step title="Look up the base user">
+    The API strips any `_RANDMAC` suffix from the username and queries MikroTik for the base user record. If the user no longer exists (e.g., session expired and was removed), the response returns `estado: "expirado"`.
+  </Step>
+
+  <Step title="Detect RANDMAC mode">
+    The server reads the user's `comment` field in MikroTik. If it contains the markers `MODE=`, `TL=`, and `TA=`, the user was created with RANDMAC support enabled and the system enters the clone-management logic.
+  </Step>
+
+  <Step title="Find or create a MAC clone">
+    The server searches all existing clones (`username_RANDMAC1` through `username_RANDMAC15`) for one whose `mac-address` field matches `current_mac`.
+
+    - **Match found** → use that clone as `username_login` for the login attempt.
+    - **No match** → create a new clone with the next available suffix (e.g., `AB3C9D_RANDMAC3`), assigned to the new MAC address.
+
+    Up to 15 clones per base user are supported. Once that limit is reached, the system cannot create new clones.
+
+    ```python
+    next_ext = max_ext + 1
+    if next_ext <= 15:
+        copy_name = f"{base_username}_RANDMAC{next_ext}"
+        api.connection.path("/ip/hotspot/user").add(
+            name=copy_name,
+            password=...,
+            profile=...,
+            **{"mac-address": mac_normalized}
+        )
+    ```
+  </Step>
+
+  <Step title="Seed a MAC cookie">
+    A MAC cookie is inserted (or replaced) in MikroTik's `/ip/hotspot/cookie` table for the current MAC, bound to the correct clone username and set to expire in 3 days.
+
+    ```python
+    api.connection.path("/ip/hotspot/cookie").add(
+        user=username_login,
+        **{"mac-address": mac_normalized, "ip-address": current_ip, "expires": "3d 00:00:00"}
+    )
+    ```
+
+    This cookie allows the device to bypass the captive portal entirely on the next visit — without needing to call the API again.
+  </Step>
+
+  <Step title="Detect RouterOS version">
+    The API reads `/system/resource/print` to determine whether the router is running **RouterOS v6** or **v7**. Each version uses a different auto-login strategy:
+
+    - **v6**: Direct `/ip/hotspot/active/login` API command (up to 3 method variants tried)
+    - **v7**: A temporary script is created on the router, executed, then removed
+  </Step>
+
+  <Step title="Execute login and verify session">
+    The appropriate login method is executed. After the login attempt, the server polls `/ip/hotspot/active/print` for up to 6 seconds, checking for the user's session. If found, `auto_conexion: "conectado"` is returned.
+  </Step>
+</Steps>
+
+---
+
+## `AutoReconnectResponse` Schema
+
+| Field | Type | Description |
+|---|---|---|
+| `success` | `bool` | Whether the operation completed without an internal error |
+| `estado` | `string` | `"activo"`, `"expirado"`, `"empresa_inactiva"`, `"router_inactivo"`, or `"error"` |
+| `auto_conexion` | `string` | `"conectado"` or `"no_conectado"` |
+| `datos_sesion` | `object \| null` | Active session info (user, address, uptime, bytes) if connected |
+| `nueva_mac` | `string \| null` | The `current_mac` that was processed |
+| `mensaje` | `string \| null` | Human-readable status message |
+| `error_detalle` | `string \| null` | Internal error detail (only present on errors) |
+| `timestamp` | `string` | ISO 8601 UTC timestamp of the response |
+
+**Successful reconnect response:**
+
+```json
+{
+  "success": true,
+  "estado": "activo",
+  "auto_conexion": "conectado",
+  "datos_sesion": {
+    "user": "AB3C9D_RANDMAC3",
+    "address": "192.168.88.115",
+    "uptime": "0s",
+    "bytes-in": "0",
+    "bytes-out": "0"
+  },
+  "nueva_mac": "11:22:33:44:55:66",
+  "mensaje": "Conexión exitosa (método: ip_user_pass)",
+  "error_detalle": null,
+  "timestamp": "2024-06-01T18:45:00.000000"
+}
+```
+
+**Expired user response:**
+
+```json
+{
+  "success": false,
+  "estado": "expirado",
+  "auto_conexion": "no_conectado",
+  "datos_sesion": null,
+  "nueva_mac": "11:22:33:44:55:66",
+  "mensaje": "Usuario no encontrado",
+  "error_detalle": null,
+  "timestamp": "2024-06-01T18:45:00.000000"
+}
+```
+
+---
+
+## When Auto-Reconnect Is Not Possible
+
+<CardGroup cols={2}>
+  <Card title="Device not in host table" icon="circle-xmark">
+    MikroTik only lists devices in `/ip/hotspot/host` once they have associated to the wireless network. If the device's current MAC is not in that table, no IP can be resolved and login cannot proceed.
+  </Card>
+  <Card title="Router unreachable" icon="wifi">
+    If the API server cannot open a RouterOS API connection (TCP 8728 / 8729) to the router within the 15-second timeout, the reconnect fails gracefully with `estado: "error"`.
+  </Card>
+  <Card title="Username is a MAC address" icon="ban">
+    If `username` itself looks like a MAC address (e.g., the portal accidentally sent the wrong field), the API immediately returns `estado: "expirado"` without touching the router.
+  </Card>
+  <Card title="Clone limit reached" icon="layer-group">
+    RANDMAC supports a maximum of 15 clones per base user. If all slots are used and none matches the current MAC, no new clone is created and the system falls back to a direct login attempt with the base user.
+  </Card>
+</CardGroup>

@@ -1,0 +1,85 @@
+---
+title: "Pagos Hotspot API: Multi-Tenant WiFi Payment Processing"
+sidebarTitle: "Introduction"
+description: "Pagos Hotspot API automates paid WiFi access on MikroTik networks by processing card payments and creating Hotspot users instantly."
+---
+
+Pagos Hotspot API is a multi-tenant FastAPI service that bridges payment processing and MikroTik WiFi infrastructure. When a customer selects an access plan in a captive portal, the API charges their card through Conekta or Mercado Pago, creates a Hotspot user directly on the MikroTik router, and returns credentials — all within a single HTTP request. Optionally, the API injects a MAC cookie to authenticate the device automatically without requiring the user to type anything.
+
+## What the API Does
+
+Every request to the public payment endpoints follows the same high-level pipeline:
+
+1. **Authenticate the portal** — The captive portal sends its per-router API Key in the `X-API-Key` header. The API resolves the associated company and router from that key.
+2. **Validate the product** — The requested `producto_id` is checked against the company's product catalog to confirm it is active and belongs to the correct tenant.
+3. **Create the MikroTik user first** — The Hotspot user is created on the router *before* the card is charged. If user creation fails, the customer is never billed.
+4. **Charge the card** — The order is submitted to Conekta or Mercado Pago using the company's own payment credentials.
+5. **Double-validate the charge** — The payment status is re-verified server-side to prevent accepting pre-authorized or pending orders.
+6. **Rollback on failure** — If the charge fails after user creation, the MikroTik user is deleted automatically, leaving no orphaned entries on the router.
+7. **Auto-connect (optional)** — If `conexion_automatica: true` and a `mac_cliente` are provided, the API binds the MAC address to the new user and triggers a login on the router via MAC cookie injection.
+8. **Return credentials** — Username, password, product details, and auto-connection status are returned to the portal in a single JSON response.
+
+## Three-Role System
+
+Access to the platform is governed by three distinct roles:
+
+| Role | Who | What They Can Do |
+|---|---|---|
+| `super_admin` | Platform operator | Create and manage companies, assign routers, create `cliente_admin` users, view the global dashboard |
+| `cliente_admin` | Per-company WiFi operator | Configure payment gateways, manage products, view routers and MikroTik profiles, inspect transactions |
+| End-user (API Key) | Captive portal software | Fetch the product catalog, process payments — scoped strictly to one router via JWT API Key |
+
+Each router has a unique JWT API Key (prefixed `jwt_`). The key encodes the `router_id` and `empresa_id`, so a single validation step resolves both the payment gateway credentials and the MikroTik connection details.
+
+## Architecture Overview
+
+```
+[Captive Portal] → POST /api/v1/payments/pagar-conekta
+                          ↓
+              [Pagos Hotspot API]
+             ↙                  ↘
+     [MikroTik API]        [Conekta / Mercado Pago]
+    (Create User)              (Charge Card)
+```
+
+The captive portal only ever speaks to the Pagos Hotspot API. Payment gateway credentials and MikroTik passwords are stored server-side (Mercado Pago tokens are AES-encrypted at rest) and are never exposed to the browser or portal HTML.
+
+## Key Features
+
+<CardGroup cols={2}>
+  <Card title="Multi-Tenant Architecture" icon="building">
+    Each company has isolated products, routers, payment credentials, and transaction history. One API deployment serves unlimited tenants.
+  </Card>
+  <Card title="Dual Payment Gateways" icon="credit-card">
+    Native integrations for both **Conekta** and **Mercado Pago**. Each company configures its own gateway keys independently.
+  </Card>
+  <Card title="Automatic Rollback" icon="rotate-left">
+    If a card charge fails after the MikroTik user was created, the user is deleted automatically — no stale accounts, no billing disputes.
+  </Card>
+  <Card title="MAC Auto-Connection" icon="wifi">
+    Pass a `mac_cliente` and `conexion_automatica: true` to skip the credentials screen entirely. The device connects the moment the payment clears.
+  </Card>
+  <Card title="Webhook Support" icon="webhook">
+    Per-company webhooks notify your backend of payment events in real time via `POST /api/v1/webhook`.
+  </Card>
+  <Card title="Structured Logging & Alerts" icon="bell">
+    All events are emitted as structured JSON via `structlog`. Telegram alerting can be wired into the notification layer for instant operator awareness.
+  </Card>
+</CardGroup>
+
+## Explore the Docs
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="bolt" href="/quickstart">
+    Send your first payment request and receive MikroTik credentials in under 5 minutes.
+  </Card>
+  <Card title="Authentication Overview" icon="key" href="/authentication/overview">
+    Understand JWT API Keys, session tokens, and the two-layer auth system.
+  </Card>
+  <Card title="Purchase Flow Guide" icon="cart-shopping" href="/guides/purchase-flow">
+    Step-by-step walkthrough of the full captive portal purchase flow.
+  </Card>
+  <Card title="Payments — Conekta" icon="code" href="/api-reference/public/payments-conekta">
+    Full API reference for `POST /api/v1/payments/pagar-conekta`.
+  </Card>
+</CardGroup>

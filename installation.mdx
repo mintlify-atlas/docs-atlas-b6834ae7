@@ -1,0 +1,259 @@
+---
+title: "Install and Deploy Pagos Hotspot API"
+sidebarTitle: "Installation"
+description: "Set up Pagos Hotspot API with Python, PostgreSQL, and Alembic migrations. Covers development and production deployment with uvicorn and gunicorn."
+---
+
+This guide covers a complete installation of Pagos Hotspot API from a fresh clone to a running server, including environment configuration, database setup, and both development and production startup commands. The service is a standard ASGI application built on FastAPI — no containers are required, though Docker Compose works equally well.
+
+## Prerequisites
+
+Before installing, ensure the following are available on your server or local machine:
+
+| Requirement | Minimum Version | Notes |
+|---|---|---|
+| Python | 3.9+ | 3.11 recommended |
+| PostgreSQL | 15+ | Must be running and accessible |
+| MikroTik RouterOS | 6+ | API service must be enabled on the router |
+| Conekta account | — | Required for Conekta payments; obtain test keys at [conekta.com](https://conekta.com) |
+| Mercado Pago account | — | Required for Mercado Pago payments; obtain credentials at [mercadopago.com](https://mercadopago.com) |
+
+<Note>
+  At least one payment gateway (Conekta or Mercado Pago) must be configured per company. You can start with test/sandbox credentials and switch to production keys later through the `cliente_admin` panel.
+</Note>
+
+## Install Steps
+
+<Steps>
+
+<Step title="Clone the Repository and Create a Virtual Environment">
+
+```bash
+git clone <your-repository-url> pagos_hotspot_api
+cd pagos_hotspot_api
+
+python -m venv venv
+
+# Linux / macOS
+source venv/bin/activate
+
+# Windows
+venv\Scripts\activate
+```
+
+</Step>
+
+<Step title="Install Python Dependencies">
+
+```bash
+pip install -r requirements.txt
+```
+
+The `requirements.txt` includes the following major packages:
+
+| Package | Purpose |
+|---|---|
+| `fastapi==0.104.1` | Web framework and OpenAPI generation |
+| `uvicorn[standard]==0.24.0` | ASGI server (development) |
+| `pydantic==2.5.0` | Request/response validation |
+| `pydantic-settings==2.1.0` | Settings management from `.env` |
+| `sqlalchemy==2.0.23` | Async ORM |
+| `asyncpg==0.29.0` | Async PostgreSQL driver |
+| `alembic==1.12.1` | Database schema migrations |
+| `psycopg2-binary==2.9.9` | Sync PostgreSQL driver (Alembic) |
+| `python-jose[cryptography]==3.3.0` | JWT API Key creation and validation |
+| `passlib[bcrypt]==1.7.4` | Password hashing |
+| `cryptography==41.0.7` | AES encryption for Mercado Pago tokens |
+| `librouteros==3.3.0` | MikroTik RouterOS API client |
+| `aiohttp==3.9.1` | Async HTTP client for gateway calls |
+| `redis==5.0.1` | Caching layer |
+| `structlog==23.2.0` | Structured JSON logging |
+| `mercadopago` | Mercado Pago SDK |
+
+</Step>
+
+<Step title="Create the .env Configuration File">
+
+Copy the example below into a new `.env` file in the project root and fill in your values:
+
+```bash
+# .env — Pagos Hotspot API configuration
+
+# ── Database ─────────────────────────────────────────────────────────────────
+DATABASE_URL=postgresql+asyncpg://postgres:yourpassword@localhost:5432/venta_fichas_db
+DATABASE_POOL_SIZE=20
+
+# ── JWT Secrets ───────────────────────────────────────────────────────────────
+JWT_APIKEY_SECRET=change_me_long_random_string_for_api_keys
+JWT_SESSION_SECRET=change_me_long_random_string_for_sessions
+JWT_ALGORITHM=HS256
+JWT_APIKEY_EXPIRE_DAYS=365
+JWT_SESSION_EXPIRE_HOURS=24
+
+# ── App Security ──────────────────────────────────────────────────────────────
+SECRET_KEY=change_me_another_long_random_string
+BCRYPT_ROUNDS=12
+
+# ── CORS ──────────────────────────────────────────────────────────────────────
+BACKEND_CORS_ORIGINS=http://localhost:3000,https://portal.yourcompany.com
+
+# ── Initial Super Admin ───────────────────────────────────────────────────────
+SUPER_ADMIN_INITIAL_EMAIL=admin@yourcompany.com
+SUPER_ADMIN_INITIAL_PASSWORD=StrongPassword123!
+
+# ── Conekta (optional fallback defaults) ─────────────────────────────────────
+CONEKTA_DEFAULT_PRIVATE_KEY=sk_test_xxxxxxxxxxxx
+CONEKTA_DEFAULT_PUBLIC_KEY=pk_test_xxxxxxxxxxxx
+
+# ── Mercado Pago ──────────────────────────────────────────────────────────────
+ENCRYPTION_KEY_MERCADO_PAGO=change_me_32_char_fernet_key_here
+
+# ── App ───────────────────────────────────────────────────────────────────────
+APP_NAME=Pagos Hotspot API
+DEBUG=false
+```
+
+**Required fields** — the server will refuse to start if any of these are missing or empty:
+
+| Variable | Description |
+|---|---|
+| `DATABASE_URL` | Full async PostgreSQL connection string (`postgresql+asyncpg://...`) |
+| `JWT_APIKEY_SECRET` | Secret used to sign and verify router API Keys |
+| `JWT_SESSION_SECRET` | Secret used to sign and verify admin session tokens |
+| `SECRET_KEY` | General application secret key |
+| `SUPER_ADMIN_INITIAL_EMAIL` | Email for the initial `super_admin` account created by `init_system.py` |
+| `SUPER_ADMIN_INITIAL_PASSWORD` | Password for the initial `super_admin` account |
+| `ENCRYPTION_KEY_MERCADO_PAGO` | Fernet key used to encrypt Mercado Pago `access_token` and `webhook_secret` at rest |
+
+<Warning>
+  **Never commit `.env` to version control.** The `JWT_APIKEY_SECRET`, `JWT_SESSION_SECRET`, and `SECRET_KEY` values are used to sign all tokens in the system. If they are rotated after deployment, all existing API Keys and admin sessions will be immediately invalidated. Generate each secret with a cryptographically secure random generator, for example:
+
+  ```bash
+  python -c "import secrets; print(secrets.token_hex(32))"
+  ```
+</Warning>
+
+</Step>
+
+<Step title="Create the PostgreSQL Database">
+
+```bash
+createdb venta_fichas_db
+```
+
+If your PostgreSQL user is not the OS user, specify credentials explicitly:
+
+```bash
+createdb -h localhost -U postgres venta_fichas_db
+```
+
+</Step>
+
+<Step title="Run Database Migrations">
+
+Alembic manages the schema. Apply all migrations with:
+
+```bash
+alembic upgrade head
+```
+
+You should see output similar to:
+
+```
+INFO  [alembic.runtime.migration] Context impl PostgreSQLImpl.
+INFO  [alembic.runtime.migration] Will assume transactional DDL.
+INFO  [alembic.runtime.migration] Running upgrade  -> 60f9103d1248, Initial schema
+```
+
+</Step>
+
+<Step title="Initialize the Super Admin Account">
+
+Run the initialization script to create the first `super_admin` user using the credentials from your `.env`:
+
+```bash
+python scripts/init_system.py
+```
+
+Expected output:
+
+```
+👑 Creando super administrador...
+✅ Super admin creado: admin@yourcompany.com
+   Contraseña: StrongPassword123!
+```
+
+If you run this script again on an existing database, it will safely skip creation:
+
+```
+⚠️  Super admin ya existe
+```
+
+</Step>
+
+<Step title="Start the Server">
+
+<CodeGroup>
+
+```bash Development
+uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+```
+
+```bash Production
+gunicorn app.main:app \
+  -w 4 \
+  -k uvicorn.workers.UvicornWorker \
+  --bind 0.0.0.0:8000
+```
+
+</CodeGroup>
+
+**Worker count guidance for production:** A good starting point is `2 × CPU cores + 1`. For a 2-core VPS, use `-w 5`. Each worker handles requests independently, so scale horizontally before increasing workers beyond 8.
+
+</Step>
+
+<Step title="Verify the Installation">
+
+```bash
+curl http://localhost:8000/health
+```
+
+Expected response:
+
+```json
+{"status": "healthy"}
+```
+
+You can also browse the auto-generated interactive API docs at:
+
+- **Swagger UI:** `http://localhost:8000/docs`
+- **ReDoc:** `http://localhost:8000/redoc`
+
+</Step>
+
+</Steps>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="bolt" href="/quickstart">
+    Send your first payment request and receive Hotspot credentials in minutes.
+  </Card>
+  <Card title="Authentication Overview" icon="key" href="/authentication/overview">
+    Learn how to generate router API Keys and admin session tokens.
+  </Card>
+</CardGroup>
+
+## Database Backup and Restore
+
+```bash
+# Backup
+pg_dump venta_fichas_db > backup_$(date +%Y%m%d).sql
+
+# Restore
+psql venta_fichas_db < backup_20250115.sql
+```
+
+<Tip>
+  Schedule automated backups with `pg_dump` via cron or your cloud provider's managed backup feature. The `venta_fichas_db` database contains all transaction history, router credentials (encrypted), and company configuration.
+</Tip>

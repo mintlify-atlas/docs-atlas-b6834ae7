@@ -1,0 +1,225 @@
+---
+title: "Router API Keys for Captive Portal Authentication"
+sidebarTitle: "API Keys"
+description: "JWT-based API Keys are issued per MikroTik router and authenticate all captive portal requests. Learn how to obtain, use, and rotate them."
+---
+
+Every MikroTik router registered on the platform is issued a dedicated **Router API Key** — a signed JWT that the captive portal HTML page embeds and sends with every API call it makes. Because the key encodes the router's identity and company membership directly in its payload, the API can scope each request to the correct tenant without a database user lookup. This page explains the key's format, lifecycle, and all management operations available to a `super_admin`.
+
+---
+
+## Key Format
+
+A Router API Key is a standard HS256-signed JWT prefixed with the literal string `jwt_`:
+
+```
+jwt_eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiJrZXlfYWJjZDEyMzQ1...
+```
+
+The `jwt_` prefix lets the API distinguish a Router API Key from a session Bearer token in a single string comparison before any cryptographic work is performed. When validating, the prefix is stripped and the remaining JWT is decoded with `JWT_APIKEY_SECRET`.
+
+---
+
+## JWT Payload
+
+The following claims are embedded in every Router API Key at issuance (from `generar_api_key_jwt` in `app/api/admin/routers.py`):
+
+| Claim | Type | Description |
+|---|---|---|
+| `jti` | `string` | Unique key identifier — e.g. `key_abcd1234ef567890` |
+| `iss` | `string` | Always `"mikrotik-payment-api"` |
+| `sub` | `string` | The `router_id` this key belongs to |
+| `empresa` | `string` | The `empresa_id` (company) that owns the router |
+| `iat` | `number` | Unix timestamp when the key was issued |
+| `exp` | `number` | Unix timestamp when the key expires |
+| `type` | `string` | Always `"router_api_key"` |
+
+---
+
+## Obtain and Use a Key
+
+<Steps>
+  <Step title="Create a router (super_admin only)">
+    A Router API Key is generated automatically when you create a new router via `POST /admin/empresas/{empresa_id}/routers`. The full key is returned once in the `api_key` field of the response.
+
+    ```bash
+    curl -X POST https://api.example.com/admin/empresas/EMP_ABC123/routers \
+      -H "Authorization: Bearer <super_admin_session_token>" \
+      -H "Content-Type: application/json" \
+      -d '{
+        "empresa_id": "EMP_ABC123",
+        "nombre": "Router Sucursal Norte",
+        "host": "192.168.1.1",
+        "puerto": 8728,
+        "usuario": "admin",
+        "password": "s3cur3p@ss",
+        "ubicacion": "Planta baja — recepción"
+      }'
+    ```
+
+    **Response:**
+
+    ```json
+    {
+      "id": "RTR_A1B2C3D4",
+      "empresa_id": "EMP_ABC123",
+      "nombre": "Router Sucursal Norte",
+      "host": "192.168.1.1",
+      "puerto": 8728,
+      "ubicacion": "Planta baja — recepción",
+      "activo": true,
+      "api_key": "jwt_eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+      "api_key_info": {
+        "key_id": "key_abcd1234ef567890",
+        "issued_at": "2024-01-15T10:30:00",
+        "expires_at": "2025-01-15T10:30:00",
+        "type": "router_api_key"
+      },
+      "creado_en": "2024-01-15T10:30:00"
+    }
+    ```
+
+    <Warning>
+      The full `api_key` value is **only returned at creation time** (and after regeneration). It is stored as a SHA-256 hash in the database and cannot be recovered later. Copy it immediately and deliver it securely to the router operator.
+    </Warning>
+  </Step>
+
+  <Step title="Configure the captive portal page">
+    Place the key in your captive portal HTML or JavaScript configuration so it is included in every API request:
+
+    ```javascript
+    const API_KEY = "jwt_eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...";
+    ```
+  </Step>
+
+  <Step title="Send the key on every captive-portal request">
+    Pass the full key (including the `jwt_` prefix) in the `X-API-Key` header:
+
+    ```bash
+    curl -X GET https://api.example.com/api/v1/catalog \
+      -H "X-API-Key: jwt_eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+    ```
+
+    The API will:
+    1. Check the `jwt_` prefix.
+    2. Strip the prefix and decode the JWT using `JWT_APIKEY_SECRET`.
+    3. Compute `SHA256(raw_jwt)` and look up the hash in the `api_keys_tracking` table.
+    4. Confirm the record exists, `revoked == false`, and the token is not expired.
+    5. Load the associated `Empresa` and `Router` objects and verify the company is active.
+  </Step>
+</Steps>
+
+---
+
+## Validation Logic
+
+When the API receives a request with an `X-API-Key` header, `AuthHandler.authenticate_api_key` (in `app/core/auth.py`) performs the following checks in order:
+
+1. **Prefix check** — The value must start with `jwt_`. Any other format returns `401 Formato de API Key inválido`.
+2. **JWT signature & expiry** — The stripped token is decoded with `JWT_APIKEY_SECRET`. An expired token returns `401 API Key expirada`; a tampered token returns `401 API Key inválida`.
+3. **Tracking lookup** — `SHA256(raw_jwt)` is computed and matched against the `key_hash` column in `api_keys_tracking`. If no non-revoked record is found, the request is rejected with `401 API Key no válida o revocada`.
+4. **Company active check** — The associated `Empresa` must exist and have `activa == true`.
+5. **Usage update** — `last_used` and `use_count` are updated on every successful authentication.
+
+---
+
+## Rotating a Key
+
+If a key is lost, compromised, or needs periodic renewal, a `super_admin` can regenerate it. The old key is **immediately revoked** and requests using it will fail.
+
+```bash
+curl -X POST https://api.example.com/admin/empresas/EMP_ABC123/routers/RTR_A1B2C3D4/regenerate-api-key \
+  -H "Authorization: Bearer <super_admin_session_token>"
+```
+
+**Response:**
+
+```json
+{
+  "message": "API Key regenerada exitosamente",
+  "router_id": "RTR_A1B2C3D4",
+  "new_api_key": "jwt_eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+  "api_key_info": {
+    "key_id": "key_ff00aa1122334455",
+    "issued_at": "2024-06-01T08:00:00",
+    "expires_at": "2025-06-01T08:00:00",
+    "type": "router_api_key"
+  },
+  "previous_key_revoked": true
+}
+```
+
+<Warning>
+  The `new_api_key` is shown **only in this response**. Update the captive portal configuration immediately after regeneration, or end-user payment flows will break.
+</Warning>
+
+<Tip>
+  Use `GET /admin/empresas/{empresa_id}/routers/{router_id}/api-key-status` to check how many days remain before a key expires. The response includes a `warning` field when fewer than 30 days remain, giving you time to rotate proactively.
+</Tip>
+
+---
+
+## Revoking a Key
+
+To immediately invalidate a specific key without issuing a replacement:
+
+```bash
+curl -X POST https://api.example.com/admin/empresas/EMP_ABC123/routers/RTR_A1B2C3D4/api-keys/key_abcd1234ef567890/revoke \
+  -H "Authorization: Bearer <super_admin_session_token>"
+```
+
+**Response:**
+
+```json
+{
+  "message": "API Key revocada exitosamente",
+  "key_id": "key_abcd1234ef567890",
+  "router_id": "RTR_A1B2C3D4",
+  "revoked_at": "2024-03-20T14:22:10"
+}
+```
+
+After revocation the router will be unable to process payments until a new key is issued via regeneration.
+
+---
+
+## Checking Key Status
+
+Inspect the current active key for any router — useful for diagnostics and proactive renewal monitoring:
+
+```bash
+curl -X GET https://api.example.com/admin/empresas/EMP_ABC123/routers/RTR_A1B2C3D4/api-key-status \
+  -H "Authorization: Bearer <super_admin_session_token>"
+```
+
+**Response (active key, expiring soon):**
+
+```json
+{
+  "router_id": "RTR_A1B2C3D4",
+  "has_active_key": true,
+  "key_id": "key_abcd1234ef567890",
+  "issued_at": "2024-01-15T10:30:00",
+  "expires_at": "2025-01-15T10:30:00",
+  "expires_in_days": 22,
+  "last_used": "2024-12-24T09:17:44",
+  "use_count": 4821,
+  "status": "active",
+  "warning": "La API Key expira en 22 días",
+  "recommendation": "Considerar regenerar la API Key pronto"
+}
+```
+
+---
+
+## Key Management Endpoint Reference
+
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/admin/empresas/{empresa_id}/routers` | Create router and generate initial API Key |
+| `POST` | `/admin/empresas/{empresa_id}/routers/{router_id}/regenerate-api-key` | Revoke current key and issue a new one |
+| `POST` | `/admin/empresas/{empresa_id}/routers/{router_id}/api-keys/{key_id}/revoke` | Revoke a specific key without replacing it |
+| `GET` | `/admin/empresas/{empresa_id}/routers/{router_id}/api-key-status` | Check status and expiry of the active key |
+| `GET` | `/admin/empresas/{empresa_id}/routers/{router_id}/api-keys` | List all keys (active and historical) for audit |
+
+All endpoints in this table require a valid `super_admin` session token in the `Authorization: Bearer` header.

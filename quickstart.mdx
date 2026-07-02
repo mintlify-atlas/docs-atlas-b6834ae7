@@ -1,47 +1,220 @@
 ---
-title: "Quickstart"
-description: "Begin with a guide on the fastest path to a successful outcome"
+title: "Get Started with Pagos Hotspot API in 5 Minutes"
+sidebarTitle: "Quickstart"
+description: "Send your first payment request and receive MikroTik Hotspot credentials in under 5 minutes using curl or the API sandbox."
 ---
 
-Describe how someone begins using your product. What is the first thing they need to do? Are there any prerequisites?
-
-A quickstart should take someone from zero to using your product. They'll get a quick win and a sense of what they can accomplish.
+This guide walks you through the minimal end-to-end flow: fetching the product catalog, submitting a card payment, and extracting the MikroTik Hotspot credentials from the response. You'll need a running server and a valid router API Key — if you haven't set those up yet, follow the [Installation guide](/installation) first.
 
 ## Prerequisites
 
-Before you begin, you must have:
+Before you begin, make sure you have:
 
-- Requirement one (for example, Node.js 18+, a free account, an API key)
-- Requirement two (for example, a compatible device, a compatible browser, a compatible operating system)
+- A running instance of Pagos Hotspot API (see [Installation](/installation))
+- A PostgreSQL database with migrations applied (`alembic upgrade head`)
+- A router API Key (`jwt_...`) generated via `POST /admin/empresas/{id}/routers`
+- A Conekta test account with a configured private key on your company
 
-## Get started
+<Note>
+  All three public-facing endpoints shown in this guide require the `X-API-Key` header. The key is a JWT prefixed with `jwt_` and is scoped to exactly one router and one company.
+</Note>
+
+## Minimal End-to-End Flow
 
 <Steps>
-  <Step title="Install">
-    Describe how to install your product or sign up.
 
-    ```bash
-    npm install your-package
-    ```
-  </Step>
-  <Step title="Configure">
-    Describe any setup or configuration needed before first use.
+<Step title="Fetch the Product Catalog">
 
-    ```bash
-    your-cli init
-    ```
-  </Step>
-  <Step title="Run it">
-    Show the first thing a user does to see it working.
+Call `GET /api/v1/catalogo_perfiles_venta` to retrieve the access plans your company has configured. This is the same call your captive portal HTML makes to build the product selection screen.
 
-    ```bash
-    your-cli start
-    ```
-  </Step>
+```bash
+curl -s https://your-api.example.com/api/v1/catalogo_perfiles_venta \
+  -H "X-API-Key: jwt_eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+```
+
+**Example response:**
+
+```json
+[
+  {
+    "id": 1,
+    "nombre_venta": "1 Hora de Internet",
+    "precio": "20.00",
+    "moneda": "MXN",
+    "perfil_mikrotik_nombre": "1hora",
+    "descripcion": "Acceso ilimitado por 1 hora",
+    "destacado": false,
+    "orden": 1
+  },
+  {
+    "id": 2,
+    "nombre_venta": "24 Horas de Internet",
+    "precio": "50.00",
+    "moneda": "MXN",
+    "perfil_mikrotik_nombre": "24horas",
+    "descripcion": "Acceso ilimitado por 24 horas",
+    "destacado": true,
+    "orden": 2
+  }
+]
+```
+
+Note the `id` of the plan the customer selects — you'll pass it as `producto_id` in the next step.
+
+</Step>
+
+<Step title="Process a Payment">
+
+Call `POST /api/v1/payments/pagar-conekta` with the card token returned by Conekta.js, the selected `producto_id`, and basic customer information.
+
+```bash
+curl -s -X POST https://your-api.example.com/api/v1/payments/pagar-conekta \
+  -H "X-API-Key: jwt_eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..." \
+  -H "Content-Type: application/json" \
+  -d '{
+    "producto_id": 1,
+    "token_tarjeta": "tok_test_visa_4242",
+    "nombre_cliente": "María García",
+    "email_cliente": "maria@example.com",
+    "telefono_cliente": "5512345678",
+    "mac_cliente": "AA:BB:CC:DD:EE:FF",
+    "ip_cliente": "192.168.88.100",
+    "conexion_automatica": false,
+    "tipo_usuario": "usuario_contrasena"
+  }'
+```
+
+**Full list of request fields:**
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `producto_id` | integer | ✅ Yes | ID from the product catalog |
+| `token_tarjeta` | string | ✅ Yes | Card token from Conekta.js |
+| `nombre_cliente` | string | ✅ Yes | Customer full name |
+| `email_cliente` | string | ✅ Yes | Valid customer email |
+| `telefono_cliente` | string | No | Customer phone number |
+| `mac_cliente` | string | No | Device MAC address for auto-connect |
+| `ip_cliente` | string | No | Device IP address for auto-connect |
+| `conexion_automatica` | boolean | No | Attempt MAC auto-login (default: `false`) |
+| `tipo_usuario` | string | No | `"usuario_contrasena"` (default) or `"pin"` |
+
+</Step>
+
+<Step title="Interpret the Response">
+
+On success, the API returns HTTP `200` with a JSON body containing the MikroTik credentials, transaction details, product information, and auto-connection status.
+
+```json
+{
+  "success": true,
+  "id_transaccion": "ord_2tVoN3nHFnMXyBdXx",
+  "estado_pago": "paid",
+  "tipo_usuario": "usuario_contrasena",
+  "usuario_hotspot": {
+    "usuario": "AB3C9D",
+    "contrasena": "1234"
+  },
+  "producto": {
+    "nombre": "1 Hora de Internet",
+    "precio": 20.0,
+    "moneda": "MXN",
+    "perfil_mikrotik": "1hora"
+  },
+  "cliente": {
+    "nombre": "María García",
+    "email": "maria@example.com"
+  },
+  "timestamp": "2025-01-15T18:30:00.123456",
+  "auto_conexion": {
+    "estado": "no_conectado",
+    "mac": "AA:BB:CC:DD:EE:FF",
+    "ip": "192.168.88.100",
+    "mensaje": "Favor de ingresar sus credenciales para conectar a Internet",
+    "verificado": false
+  }
+}
+```
+
+The fields your captive portal needs to display to the user are:
+
+- **`usuario_hotspot.usuario`** — the Hotspot username to enter in the login form
+- **`usuario_hotspot.contrasena`** — the Hotspot password
+- **`auto_conexion.estado`** — `"conectado"` if MAC auto-login succeeded, `"no_conectado"` otherwise
+- **`auto_conexion.mensaje`** — human-readable connection status message for the customer
+
+When `tipo_usuario` is `"pin"`, the API generates a 6-digit numeric PIN stored in `usuario_hotspot.usuario` and `usuario_hotspot.contrasena` will be the same value. Present only the PIN to the user in that case.
+
+</Step>
+
+<Step title="Enable Auto-Connection (Optional)">
+
+If the customer's device is already visible in the MikroTik Hotspot host table (i.e., they are on the WiFi network), you can skip the credentials screen entirely by setting `conexion_automatica: true` and passing the device MAC address.
+
+```bash
+curl -s -X POST https://your-api.example.com/api/v1/payments/pagar-conekta \
+  -H "X-API-Key: jwt_eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..." \
+  -H "Content-Type: application/json" \
+  -d '{
+    "producto_id": 1,
+    "token_tarjeta": "tok_test_visa_4242",
+    "nombre_cliente": "María García",
+    "email_cliente": "maria@example.com",
+    "mac_cliente": "AA:BB:CC:DD:EE:FF",
+    "ip_cliente": "192.168.88.100",
+    "conexion_automatica": true,
+    "tipo_usuario": "usuario_contrasena"
+  }'
+```
+
+When auto-connection succeeds, the response includes:
+
+```json
+"auto_conexion": {
+  "estado": "conectado",
+  "mac": "AA:BB:CC:DD:EE:FF",
+  "ip": "192.168.88.100",
+  "mensaje": "¡Conexión establecida con éxito! Disfrute de Internet sin límites",
+  "verificado": true,
+  "session_id": "ABC123XYZ"
+}
+```
+
+**Requirements for auto-connection to work:**
+- The device MAC must be present in `/ip/hotspot/host` on the router at the time of the request
+- A valid `mac_cliente` must be passed in the request body
+- `conexion_automatica` must be `true`
+
+</Step>
+
 </Steps>
 
-<Tip>
-  Give people a way to get help. This could be a link to a support page, a chat with a customer support agent, or a forum for your product.
+## Test Card Numbers
 
-  Example: Need help? Reach out to us at [support@yourcompany.com](mailto:support@yourcompany.com).
-</Tip>
+<Note>
+  Use the following Conekta test cards in your sandbox environment. These tokens will always return a successful `paid` status and never charge a real card.
+
+  | Network | Number | CVV | Expiry |
+  |---|---|---|---|
+  | Visa | `4242 4242 4242 4242` | `123` | Any future date |
+
+  Generate a card token by calling `Conekta.js` with the test card number before sending the payment request. The resulting `token_tarjeta` value looks like `tok_test_...`.
+</Note>
+
+## Handling Errors
+
+If the payment is declined or the router is unreachable, the API returns a non-2xx status with a JSON `detail` field:
+
+```json
+{
+  "detail": "El pago fue declinado. Contacte a su banco."
+}
+```
+
+| HTTP Status | Meaning |
+|---|---|
+| `402` | Payment rejected by the gateway (card declined, insufficient funds, etc.) |
+| `404` | Product not found or does not belong to this company |
+| `401` | Invalid, expired, or revoked API Key |
+| `500` | Internal server error — MikroTik unreachable or unexpected failure |
+
+In all error cases, any MikroTik user that was created during the request is automatically rolled back.

@@ -1,0 +1,209 @@
+---
+title: "Telegram Payment Notifications Setup"
+sidebarTitle: "Telegram"
+description: "Configure a Telegram bot to receive instant payment approval and rejection alerts for each company's transactions."
+---
+
+Telegram notifications are an optional per-company feature that delivers real-time payment alerts directly to a Telegram chat or group. When enabled, the API sends a formatted HTML message every time a payment is **approved** or **rejected** through either Conekta or Mercado Pago. This gives business owners and operators immediate visibility into sales activity without needing to check a dashboard.
+
+---
+
+## Required credentials
+
+| Field | Description |
+|---|---|
+| `telegram_bot_token` | Token issued by `@BotFather` when you create a bot (e.g. `7123456789:AAHxxxxxx`) |
+| `telegram_chat_id` | Numeric ID of the chat or group where messages will be delivered |
+| `notificaciones_telegram` | Boolean flag — must be `true` for alerts to be sent |
+
+<Tip>
+  **How to get a bot token from `@BotFather`:**
+
+  1. Open Telegram and search for `@BotFather`.
+  2. Send the command `/newbot` and follow the prompts to choose a name and username for your bot.
+  3. `@BotFather` will reply with a token in the format `1234567890:AABBCCddEEff...`. Copy this value.
+  4. Start a conversation with your new bot (or add it to a group) so it can send messages.
+  5. To get your `chat_id`, forward a message from your bot chat to `@userinfobot`, or call `https://api.telegram.org/bot<token>/getUpdates` and read the `chat.id` from the JSON response.
+</Tip>
+
+---
+
+## Setting Telegram credentials
+
+Telegram credentials can be set through two different endpoints:
+
+### Option A — Via the Mercado Pago credentials endpoint
+
+```http
+POST /api/v1/payments/configurar-credenciales
+```
+
+This endpoint accepts the full payment + Telegram configuration in one request, making it convenient to set everything at once during onboarding.
+
+```bash
+curl -X POST https://api.example.com/api/v1/payments/configurar-credenciales \
+  -H "Authorization: Bearer <session_token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "telegram_bot_token": "7123456789:AAHxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    "telegram_chat_id": "-100123456789",
+    "notificaciones_telegram": true
+  }'
+```
+
+### Option B — Via the company info endpoint
+
+```http
+PUT /api/v1/admin/mi-empresa
+```
+
+Use this endpoint when updating only company metadata or Telegram settings, without touching payment credentials.
+
+```bash
+curl -X PUT https://api.example.com/api/v1/admin/mi-empresa \
+  -H "Authorization: Bearer <session_token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "telegram_bot_token": "7123456789:AAHxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    "telegram_chat_id": "-100123456789",
+    "notificaciones_telegram": true
+  }'
+```
+
+**Successful response:**
+
+```json
+{
+  "message": "Información de la empresa actualizada correctamente",
+  "empresa": {
+    "nombre": "Mi Empresa",
+    "contacto_email": "admin@miempresa.com",
+    "contacto_telefono": "+521234567890",
+    "telegram_bot_token": "7123456789:AAHxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    "telegram_chat_id": "-100123456789",
+    "notificaciones_telegram": true
+  }
+}
+```
+
+---
+
+## Testing the connection
+
+Before relying on live payment notifications, verify that the bot token and chat ID are correct by sending a test message.
+
+```http
+POST /api/v1/admin/test-telegram
+```
+
+The request body accepts the credentials you want to test. If the body fields are omitted, the endpoint falls back to the values already stored in the database for the authenticated company — useful for verifying saved credentials without re-entering them.
+
+<ParamField body="token" type="string">
+  Bot token to test. Falls back to the company's stored `telegram_bot_token`
+  if omitted.
+</ParamField>
+
+<ParamField body="chat_id" type="string">
+  Chat ID to send the test message to. Falls back to the company's stored
+  `telegram_chat_id` if omitted.
+</ParamField>
+
+<CodeGroup>
+
+```bash Test with explicit credentials
+curl -X POST https://api.example.com/api/v1/admin/test-telegram \
+  -H "Authorization: Bearer <session_token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "token": "7123456789:AAHxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    "chat_id": "-100123456789"
+  }'
+```
+
+```bash Test with stored credentials
+curl -X POST https://api.example.com/api/v1/admin/test-telegram \
+  -H "Authorization: Bearer <session_token>" \
+  -H "Content-Type: application/json" \
+  -d '{}'
+```
+
+</CodeGroup>
+
+**Successful response:**
+
+```json
+{
+  "message": "Mensaje de prueba enviado con éxito"
+}
+```
+
+The bot sends the following test message to the chat:
+
+```
+⚡ Prueba de Conexión en Vivo
+🏢 Empresa: Mi Empresa
+✅ ¡Tus credenciales son correctas!
+```
+
+If the token is invalid or the bot has not been started, the endpoint returns HTTP `500` with a descriptive error.
+
+---
+
+## Notification messages
+
+All messages are sent via the [Telegram Bot API](https://core.telegram.org/bots/api#sendmessage) with `parse_mode=HTML`, so bold text and code blocks render correctly in the chat.
+
+### Payment approved
+
+Sent after a successful charge on either Conekta or Mercado Pago.
+
+```
+✅ ¡Pago Aprobado!
+🏢 Empresa: Mi Empresa
+📦 Plan: Internet 1 Hora
+💰 Monto: $30 MXN
+👤 Cliente: Juan Pérez
+🆔 Transacción: 1234567890
+👤 Usuario: PT-A1B2C
+🔑 Contraseña: 4821
+🔥 Acceso WiFi entregado correctamente.
+```
+
+For **PIN-type** users the credentials section is simplified:
+
+```
+🔑 PIN: 49302
+```
+
+### Payment rejected
+
+Sent when a payment is declined (HTTP `402` response from the payment gateway).
+
+```
+❌ Pago Rechazado
+🏢 Empresa: Mi Empresa
+📦 Plan: Internet 1 Hora
+💰 Monto: $30 MXN
+👤 Cliente: Juan Pérez
+⚠️ Motivo: Fondos insuficientes en la tarjeta.
+```
+
+<Note>
+  Notifications are dispatched as FastAPI **background tasks** so they never
+  delay the payment response returned to the customer. A failure to reach
+  Telegram (e.g. network timeout) is logged but does not affect the payment
+  outcome or the delivery of WiFi credentials.
+</Note>
+
+---
+
+## Disabling notifications
+
+Set `notificaciones_telegram` to `false` to stop all alerts without removing the stored credentials:
+
+```bash
+curl -X PUT https://api.example.com/api/v1/admin/mi-empresa \
+  -H "Authorization: Bearer <session_token>" \
+  -H "Content-Type: application/json" \
+  -d '{ "notificaciones_telegram": false }'
+```

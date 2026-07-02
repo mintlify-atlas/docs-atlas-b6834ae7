@@ -1,0 +1,170 @@
+---
+title: "GET /api/v1/catalogo_perfiles_venta — Product Catalog"
+sidebarTitle: "Catalog"
+description: "Lists all active Hotspot products for the authenticated router, ordered by visual order and featured status."
+---
+
+The product catalog endpoints return the WiFi access plans available for purchase through the captive portal. Each product maps directly to a MikroTik Hotspot profile, and carries all the information needed to render a pricing card in the frontend — including price, description, an optional image, and configurable detail bullets. Products are filtered by company and router, so only plans assigned to the authenticated router are returned.
+
+Results are ordered first by `orden_visual` (ascending), then by `destacado` (featured products first), giving administrators full control over the display order.
+
+## Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/v1/catalogo_perfiles_venta` | List all active products for the router |
+| `GET` | `/api/v1/catalogo_perfiles_venta/{producto_id}` | Get a single product by ID |
+
+---
+
+## Authentication
+
+<ParamField header="X-API-Key" type="string" required>
+  Router API Key in the format `jwt_<token>`. Identifies the company and router used to filter the product list.
+</ParamField>
+
+---
+
+## GET /api/v1/catalogo_perfiles_venta
+
+Returns an array of all active (`activo = true`) products assigned to the authenticated router.
+
+### Response
+
+Returns a JSON array of `ProductoVentaResponse` objects. Returns an empty array `[]` if no active products exist for this router.
+
+<ResponseField name="id" type="integer">
+  Unique internal product ID. Use this value as `producto_id` when submitting a payment.
+</ResponseField>
+
+<ResponseField name="perfil_mikrotik_id" type="string">
+  Internal identifier of the MikroTik Hotspot profile linked to this product.
+</ResponseField>
+
+<ResponseField name="perfil_mikrotik_nombre" type="string">
+  Display name of the MikroTik Hotspot profile (e.g., `"5Mbps-1hora"`). This is the profile that will be applied when the hotspot user is created.
+</ResponseField>
+
+<ResponseField name="nombre_venta" type="string">
+  Commercial name of the product as shown to the end user (e.g., `"1 Hora de Internet"`).
+</ResponseField>
+
+<ResponseField name="descripcion" type="string | null">
+  Optional short description of the product. May be `null` if not configured.
+</ResponseField>
+
+<ResponseField name="imagen_url" type="string | null">
+  Optional URL to a product image. May be `null` if no image has been uploaded.
+</ResponseField>
+
+<ResponseField name="precio" type="float">
+  Price of the product in the configured currency. This is the exact amount that must be submitted to the payment endpoints.
+</ResponseField>
+
+<ResponseField name="moneda" type="string">
+  ISO 4217 currency code (e.g., `"MXN"`, `"USD"`).
+</ResponseField>
+
+<ResponseField name="detalles" type="array of objects">
+  A flexible JSON array of feature/detail bullets for the product. Each element is an object with arbitrary string keys and values. Structure varies by configuration — a common format is `[{"icono": "⚡", "valor": "5 Mbps"}]`. May be an empty array `[]`.
+</ResponseField>
+
+<ResponseField name="destacado" type="boolean">
+  Whether this product is marked as featured. Featured products appear before non-featured products within the same visual-order tier.
+</ResponseField>
+
+<ResponseField name="creado_en" type="string">
+  ISO 8601 datetime string of when the product was created (e.g., `"2024-01-15T10:30:00"`).
+</ResponseField>
+
+---
+
+## GET /api/v1/catalogo_perfiles_venta/{producto_id}
+
+Returns the details of a single active product by its ID. The product must belong to the company associated with the API Key and must be assigned to the authenticated router.
+
+### Path Parameters
+
+<ParamField path="producto_id" type="integer" required>
+  The numeric ID of the product to retrieve. Obtain this from the list endpoint.
+</ParamField>
+
+### Response
+
+Returns a single `ProductoVentaResponse` object with the same fields described above.
+
+### Error Responses
+
+| Status | Meaning |
+|--------|---------|
+| `404 Not Found` | Product not found, does not belong to this company/router, or is inactive. |
+
+---
+
+## Examples
+
+### List all products — cURL
+
+```bash
+curl -X GET "https://api.example.com/api/v1/catalogo_perfiles_venta" \
+  -H "X-API-Key: jwt_eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb3V0ZXJfaWQiOjMsImVtcHJlc2FfaWQiOjF9.SIG"
+```
+
+### Get single product — cURL
+
+```bash
+curl -X GET "https://api.example.com/api/v1/catalogo_perfiles_venta/2" \
+  -H "X-API-Key: jwt_eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb3V0ZXJfaWQiOjMsImVtcHJlc2FfaWQiOjF9.SIG"
+```
+
+### Response `200 OK` (list — 2 products)
+
+```json
+[
+  {
+    "id": 1,
+    "perfil_mikrotik_id": "prof_001",
+    "perfil_mikrotik_nombre": "5Mbps-1hora",
+    "nombre_venta": "1 Hora de Internet",
+    "descripcion": "Navegación rápida por una hora completa",
+    "imagen_url": "https://cdn.example.com/products/1hora.png",
+    "precio": 15.00,
+    "moneda": "MXN",
+    "detalles": [
+      { "icono": "⚡", "valor": "5 Mbps de velocidad" },
+      { "icono": "⏱️", "valor": "1 hora de acceso" },
+      { "icono": "📱", "valor": "Todos los dispositivos" }
+    ],
+    "destacado": true,
+    "creado_en": "2024-01-15T10:30:00"
+  },
+  {
+    "id": 2,
+    "perfil_mikrotik_id": "prof_002",
+    "perfil_mikrotik_nombre": "10Mbps-3horas",
+    "nombre_venta": "3 Horas de Internet",
+    "descripcion": null,
+    "imagen_url": null,
+    "precio": 30.00,
+    "moneda": "MXN",
+    "detalles": [
+      { "icono": "🚀", "valor": "10 Mbps de velocidad" },
+      { "icono": "⏱️", "valor": "3 horas de acceso" }
+    ],
+    "destacado": false,
+    "creado_en": "2024-01-16T08:00:00"
+  }
+]
+```
+
+### Error response `404 Not Found`
+
+```json
+{
+  "detail": "Producto no encontrado o no disponible"
+}
+```
+
+<Tip>
+  Always read `precio` and `moneda` from this endpoint and pass `precio` verbatim to the payment endpoints. The Mercado Pago endpoint validates that `transaction_amount` matches the product price to within ±0.01, and will reject the request if they differ.
+</Tip>

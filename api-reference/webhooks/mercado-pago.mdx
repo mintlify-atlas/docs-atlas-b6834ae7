@@ -1,0 +1,399 @@
+---
+title: "Mercado Pago Webhook Endpoint and Signature Verification"
+sidebarTitle: "Mercado Pago"
+description: "Receive real-time payment status updates from Mercado Pago. Covers event types, HMAC-SHA256 signature verification, and transaction state updates."
+---
+
+The Mercado Pago webhook endpoint is a single, shared URL that receives payment status notifications for all tenants (empresas) registered on the platform. When Mercado Pago delivers a notification, the API immediately acknowledges receipt with HTTP 200, identifies the relevant tenant and transaction, verifies the HMAC-SHA256 signature using that tenant's stored secret, and then enqueues a background task to fetch the authoritative payment status and update the transaction record.
+
+---
+
+## Main Endpoint
+
+<ParamField header="X-Signature" type="string">
+  HMAC-SHA256 signature provided by Mercado Pago. Format: `ts=<timestamp>,v1=<hex-digest>`. Required for signature verification when the empresa has a `webhook_secret` configured.
+</ParamField>
+
+<ParamField header="X-Request-Id" type="string">
+  Unique request identifier provided by Mercado Pago. Used as part of the HMAC manifest alongside the timestamp and `data.id`. Required for signature verification.
+</ParamField>
+
+### `POST /api/v1/webhook/mercado-pago`
+
+**Authentication:** None — this is a public endpoint. Security is enforced through HMAC-SHA256 signature verification per tenant.
+
+<Note>
+  The endpoint always returns HTTP **200** immediately upon receiving a request — even before signature verification or transaction processing completes. This is required by Mercado Pago to prevent automatic retries. All processing happens asynchronously in a background task.
+</Note>
+
+<Warning>
+  If an empresa does not have a `webhook_secret` configured, the webhook will still be accepted and processed **without any signature verification**. This means any caller who knows your webhook URL can inject arbitrary payment notifications. Always configure a `webhook_secret` for every tenant before going live in production.
+</Warning>
+
+---
+
+## Webhook Payload Structure
+
+Mercado Pago sends a JSON body with the following fields:
+
+| Field | Type | Description |
+|---|---|---|
+| `type` | string | Event type. Handled values: `"payment"`, `"test"`. Other types are logged and acknowledged. |
+| `id` | string | Notification ID assigned by Mercado Pago. Used for idempotency tracking. |
+| `action` | string | Action that triggered the event, e.g. `"payment.updated"`. |
+| `data.id` | string | Payment ID from Mercado Pago. Used as the primary identifier for fetching real payment status and for HMAC manifest construction. |
+| `external_reference` | string | *(Optional)* Reference set during payment creation, used to look up the transaction in the database. Takes priority over `data.id` for transaction lookup. |
+
+**Sample payload:**
+
+```json
+{
+  "type": "payment",
+  "id": "1234567890",
+  "action": "payment.updated",
+  "data": {
+    "id": "9876543210"
+  },
+  "external_reference": "txn_abc123_empresa1"
+}
+```
+
+---
+
+## Signature Verification
+
+Mercado Pago signs every webhook delivery using HMAC-SHA256. The API verifies this signature using the `webhook_secret` stored (encrypted) for each empresa.
+
+**Algorithm:** `HMAC-SHA256`
+
+**Key:** The empresa's `webhook_secret`, decrypted at runtime via `SecureTokenManager`.
+
+**Manifest format:**
+```
+id:{data_id};request-id:{x_request_id};ts:{timestamp};
+```
+
+Where:
+- `data_id` — the value of `data.id` from the webhook payload
+- `x_request_id` — the value of the `X-Request-Id` request header
+- `timestamp` — the `ts` component extracted from the `X-Signature` header
+
+**`X-Signature` header format:**
+```
+ts=1704067200,v1=a1b2c3d4e5f6...
+```
+
+The `ts` and `v1` components are parsed individually. The manifest is constructed, the HMAC digest is computed, and the result is compared with `v1` using `hmac.compare_digest` to prevent timing attacks.
+
+**Verification outcomes:**
+
+| Condition | Outcome |
+|---|---|
+| `webhook_secret` configured, valid signature | Verified — processing continues |
+| `webhook_secret` configured, invalid signature | Logged as warning — processing continues (not rejected) |
+| `webhook_secret` configured, `X-Signature` header missing | Logged as warning — processing continues |
+| `webhook_secret` configured, `X-Request-Id` header missing | Logged as warning — processing continues |
+| No `webhook_secret` configured | No verification — processing continues (not recommended) |
+
+**Python verification example:**
+
+```python
+import hmac
+import hashlib
+
+def verify_signature(x_signature: str, x_request_id: str, data_id: str, secret: str) -> bool:
+    parts = {p.split('=')[0]: p.split('=')[1] for p in x_signature.split(',')}
+    timestamp = parts.get('ts')
+    received_hash = parts.get('v1')
+    message = f"id:{data_id};request-id:{x_request_id};ts:{timestamp};"
+    expected = hmac.new(secret.encode(), message.encode(), hashlib.sha256).hexdigest()
+    return hmac.compare_digest(expected, received_hash)
+```
+
+---
+
+## Processing Flow
+
+<Steps>
+  <Step title="Acknowledge immediately">
+    The API prepares a `200 OK` response base object with `status: "received"` before any async work begins. This prevents Mercado Pago from retrying the delivery.
+  </Step>
+  <Step title="Parse the payload">
+    The raw request body is decoded and parsed as JSON. If JSON parsing fails, the pre-built `200` response is returned immediately without further processing.
+  </Step>
+  <Step title="Extract key identifiers">
+    The following fields are extracted from the parsed payload: `type`, `id` (notification ID), `action`, `data.id` (payment ID / used for HMAC), and `external_reference`.
+  </Step>
+  <Step title="Look up the transaction">
+    The API searches the `transacciones` table. `external_reference` is tried first; if no match is found, `data.id` is used as a fallback `transaccion_id` lookup. If neither resolves to a record, the `200` base response is returned.
+  </Step>
+  <Step title="Identify the empresa">
+    The empresa record is loaded using `empresa_id` from the found transaction. If the empresa does not exist, processing is aborted (still returns `200`).
+  </Step>
+  <Step title="Verify HMAC signature">
+    If the empresa has `mercado_pago_webhook_secret` set, the secret is decrypted and `verify_webhook_signature()` is called with the `X-Signature` header, `X-Request-Id` header, and `data.id`. The outcome is logged and stored in the response but does **not** block processing.
+  </Step>
+  <Step title="Enqueue background task (type='payment')">
+    For `type="payment"` events, `process_mercado_pago_notification()` is added to `BackgroundTasks`. The full webhook dict, notification ID, and database session are passed to the task. The API then returns `200` immediately.
+  </Step>
+  <Step title="Background: idempotency check">
+    The background task checks `transaction.metadata_json["processed_notifications"]` for the current `notification_id`. If already present, the notification is silently ignored. The list is capped at the last 20 processed IDs.
+  </Step>
+  <Step title="Background: fetch real payment status">
+    The empresa's `mercado_pago_access_token` is decrypted and used to call `mercado_pago_service.get_payment_status(access_token, payment_id)`. This is the authoritative status from Mercado Pago — not just the status in the webhook body.
+  </Step>
+  <Step title="Background: update transaction record">
+    `transaction.estado_pago` is set to the real status returned by the API call (e.g. `"approved"`, `"pending"`, `"rejected"`). If the status is `"approved"` and `pagada_en` is `null`, it is set to the current UTC timestamp. The `notification_id`, `webhook_processed`, and `webhook_received_at` fields are also updated. A webhook history entry is appended to `metadata_json.webhooks`, and the `notification_id` is recorded in `metadata_json.processed_notifications`. The database transaction is committed.
+  </Step>
+</Steps>
+
+---
+
+## Transaction State Updates
+
+The following `Transaccion` model fields are written during webhook processing:
+
+| Field | Type | Description |
+|---|---|---|
+| `estado_pago` | `VARCHAR(20)` | Updated to the real status from Mercado Pago API: `"approved"`, `"pending"`, `"rejected"`, or any other status string returned. |
+| `pagada_en` | `TIMESTAMP` | Set to the current UTC time when `estado_pago` transitions to `"approved"` and the field is currently `NULL`. Not overwritten on subsequent approved events. |
+| `notification_id` | `VARCHAR(100)` | Stores the Mercado Pago notification `id` from the webhook payload. |
+| `webhook_processed` | `BOOLEAN` | Set to `true` after the background task runs successfully. |
+| `webhook_received_at` | `TIMESTAMP` | Set to the UTC timestamp when the background processing task ran. |
+| `metadata_json` | `JSONB` | Extended with webhook history. See structure below. |
+
+**`metadata_json` structure after processing:**
+
+```json
+{
+  "last_webhook": {
+    "notification_id": "1234567890",
+    "received_at": "2025-01-01T12:00:00.000000",
+    "action": "payment.updated",
+    "queried_status": "approved",
+    "status_detail": "accredited"
+  },
+  "processed_notifications": [
+    "1234567890"
+  ],
+  "webhooks": [
+    {
+      "notification_id": "1234567890",
+      "received_at": "2025-01-01T12:00:00.000000",
+      "old_status": "pending",
+      "new_status": "approved",
+      "status_detail": "accredited",
+      "date_last_updated": "2025-01-01T12:00:00.000-04:00"
+    }
+  ]
+}
+```
+
+`processed_notifications` retains the last **20** notification IDs to bound storage growth while still preventing duplicate processing across retries.
+
+---
+
+## Response Body
+
+All responses from `POST /api/v1/webhook/mercado-pago` return HTTP **200**. The body varies by outcome:
+
+**Successful `payment` event:**
+
+```json
+{
+  "status": "received",
+  "message": "Webhook received and queued",
+  "received_at": "2025-01-01T12:00:00.000000",
+  "notification_id": "1234567890",
+  "type": "payment",
+  "empresa": {
+    "id": "empresa_abc",
+    "nombre": "Hotspot Café Centro"
+  },
+  "transaction": {
+    "id": 42,
+    "transaccion_id": "mp_9876543210",
+    "external_reference": "txn_abc123_empresa1"
+  },
+  "signature_verified": true,
+  "data_id": "9876543210"
+}
+```
+
+**`test` event:**
+
+```json
+{
+  "status": "received",
+  "message": "Test webhook received successfully",
+  "received_at": "2025-01-01T12:00:00.000000",
+  "notification_id": "test_001",
+  "empresa": "Hotspot Café Centro",
+  "signature_verified": false
+}
+```
+
+**Transaction not found / parse error:**
+
+```json
+{
+  "status": "received",
+  "message": "Webhook received and queued",
+  "received_at": "2025-01-01T12:00:00.000000"
+}
+```
+
+---
+
+## Additional Endpoints
+
+### `GET /api/v1/webhook/test-webhook`
+
+Health check — verifies the webhook service is reachable. No authentication required.
+
+**Response:**
+
+```json
+{
+  "status": "active",
+  "service": "Mercado Pago Webhook",
+  "endpoint": "/api/v1/webhook/mercado-pago",
+  "method": "POST",
+  "description": "Recibe notificaciones de pagos de Mercado Pago (Multi-tenant)",
+  "health_check": "ok",
+  "timestamp": "2025-01-01T12:00:00.000000"
+}
+```
+
+---
+
+### `GET /api/v1/webhook/transaccion/{external_reference}`
+
+Look up a transaction by its `external_reference`. No authentication required.
+
+**Path parameter:** `external_reference` — the reference string associated with the transaction.
+
+Returns `404` if no matching transaction is found.
+
+**Response:**
+
+```json
+{
+  "transaction": {
+    "id": 42,
+    "transaccion_id": "mp_9876543210",
+    "external_reference": "txn_abc123_empresa1",
+    "empresa_id": "empresa_abc",
+    "estado_pago": "approved",
+    "monto": 49.00,
+    "usuario_hotspot": "user_abc123",
+    "creada_en": "2025-01-01T11:55:00.000000",
+    "pagada_en": "2025-01-01T12:00:05.000000",
+    "webhook_processed": true,
+    "notification_id": "1234567890",
+    "metadata_json": {}
+  },
+  "empresa": {
+    "id": "empresa_abc",
+    "nombre": "Hotspot Café Centro",
+    "tiene_webhook_secret": true
+  }
+}
+```
+
+---
+
+### `POST /api/v1/webhook/empresa/{empresa_id}/configurar-webhook`
+
+Store a `webhook_secret` for a specific empresa. No authentication required on the endpoint itself.
+
+**Path parameter:** `empresa_id` — the empresa identifier.
+
+**Request body:**
+
+```json
+{
+  "webhook_secret": "your-mercado-pago-webhook-secret"
+}
+```
+
+Returns `400` if `webhook_secret` is absent from the request body, and `404` if the empresa does not exist.
+
+**Response:**
+
+```json
+{
+  "success": true,
+  "message": "Clave secreta configurada correctamente",
+  "empresa": {
+    "id": "empresa_abc",
+    "nombre": "Hotspot Café Centro"
+  },
+  "webhook_url": "https://your-domain.com/api/v1/webhook/mercado-pago",
+  "instrucciones": [
+    "1. Ir al panel de Mercado Pago",
+    "2. Configurar Webhooks",
+    "3. URL: https://your-domain.com/api/v1/webhook/mercado-pago",
+    "4. Usar esta misma clave secreta: your-merca...",
+    "5. Suscribir eventos: 'payment'"
+  ]
+}
+```
+
+---
+
+### `GET /api/v1/webhook/empresa/{empresa_id}/estado-webhook`
+
+Check the webhook configuration status and transaction statistics for an empresa.
+
+**Path parameter:** `empresa_id` — the empresa identifier.
+
+Returns `404` if the empresa does not exist.
+
+**Response:**
+
+```json
+{
+  "empresa": {
+    "id": "empresa_abc",
+    "nombre": "Hotspot Café Centro",
+    "modo_mercado_pago": "production",
+    "access_token_configurado": true,
+    "webhook_secret_configurado": true
+  },
+  "estadisticas": {
+    "total_transacciones": 158
+  },
+  "configuracion_webhook": {
+    "url": "https://your-domain.com/api/v1/webhook/mercado-pago",
+    "metodo": "POST",
+    "header_firma": "X-Signature",
+    "tipo_contenido": "application/json"
+  },
+  "estado": "configurado",
+  "timestamp": "2025-01-01T12:00:00.000000"
+}
+```
+
+The `estado` field is `"configurado"` when `webhook_secret_configurado` is `true`, and `"pendiente"` otherwise.
+
+---
+
+## Mercado Pago Dashboard Configuration
+
+To start receiving notifications, register the webhook URL in your Mercado Pago developer dashboard:
+
+1. Log in to the [Mercado Pago developer panel](https://www.mercadopago.com/developers/panel).
+2. Navigate to **Your integrations → Webhooks**.
+3. Set the notification URL:
+
+   ```
+   https://your-domain.com/api/v1/webhook/mercado-pago
+   ```
+
+4. Subscribe to the **`payment`** event type.
+5. Copy the **secret key** generated by Mercado Pago and store it on the API using `POST /api/v1/webhook/empresa/{empresa_id}/configurar-webhook`.
+
+<Warning>
+  The webhook URL is shared across **all** tenants. Tenant identification is performed automatically by matching `external_reference` (or `data.id`) from the payload against transaction records in the database. Ensure all payment requests set a unique `external_reference` scoped to the correct empresa.
+</Warning>

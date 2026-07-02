@@ -1,72 +1,103 @@
 {
   "$schema": "https://mintlify.com/docs.json",
-  "theme": "mint",
-  "name": "Mintlify Starter Kit",
+  "name": "Pagos Hotspot API",
+  "theme": "luma",
   "colors": {
-    "primary": "#16A34A",
-    "light": "#07C983",
-    "dark": "#15803D"
-  },
-  "favicon": "/favicon.svg",
-  "navigation": {
-    "pages": [
-      {
-        "group": "Getting Started",
-        "pages": [
-          "index",
-          "quickstart"
-        ]
-      }
-    ],
-    "global": {
-      "anchors": [
-        {
-          "anchor": "Documentation",
-          "href": "https://mintlify.com/docs",
-          "icon": "book-open-cover"
-        },
-        {
-          "anchor": "Blog",
-          "href": "https://mintlify.com/blog",
-          "icon": "newspaper"
-        }
-      ]
-    }
-  },
-  "logo": {
-    "light": "/logo/light.svg",
-    "dark": "/logo/dark.svg"
+    "primary": "#2563EB",
+    "light": "#DBEAFE",
+    "dark": "#1E3A8A"
   },
   "navbar": {
-    "links": [
-      {
-        "label": "Support",
-        "href": "mailto:hi@mintlify.com"
-      }
-    ],
     "primary": {
-      "type": "button",
-      "label": "Dashboard",
-      "href": "https://app.mintlify.com"
+      "type": "github",
+      "href": "https://github.com/sistemashm24/pagos_hotspot_api"
     }
-  },
-  "contextual": {
-    "options": [
-      "copy",
-      "view",
-      "chatgpt",
-      "claude",
-      "perplexity",
-      "mcp",
-      "cursor",
-      "vscode"
-    ]
   },
   "footer": {
     "socials": {
-      "x": "https://x.com/mintlify",
-      "github": "https://github.com/mintlify",
-      "linkedin": "https://linkedin.com/company/mintlify"
+      "github": "https://github.com/sistemashm24/pagos_hotspot_api"
     }
+  },
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Getting Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "installation"
+            ]
+          },
+          {
+            "group": "Authentication",
+            "pages": [
+              "authentication/overview",
+              "authentication/api-keys",
+              "authentication/jwt-sessions"
+            ]
+          },
+          {
+            "group": "Configuration",
+            "pages": [
+              "configuration/environment-variables",
+              "configuration/conekta",
+              "configuration/mercado-pago",
+              "configuration/mikrotik",
+              "configuration/telegram-notifications"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "guides/purchase-flow",
+              "guides/auto-reconnect",
+              "guides/captive-portal-integration",
+              "guides/multi-tenant-setup"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Public Endpoints",
+            "pages": [
+              "api-reference/public/config",
+              "api-reference/public/catalog",
+              "api-reference/public/payments-conekta",
+              "api-reference/public/payments-mercadopago",
+              "api-reference/public/hotspot-reconnect"
+            ]
+          },
+          {
+            "group": "Admin Endpoints",
+            "pages": [
+              "api-reference/admin/company",
+              "api-reference/admin/products",
+              "api-reference/admin/mikrotik-profiles",
+              "api-reference/admin/transactions"
+            ]
+          },
+          {
+            "group": "Super Admin Endpoints",
+            "pages": [
+              "api-reference/super-admin/companies",
+              "api-reference/super-admin/routers",
+              "api-reference/super-admin/users"
+            ]
+          },
+          {
+            "group": "Webhooks",
+            "pages": [
+              "api-reference/webhooks/mercado-pago"
+            ]
+          }
+        ]
+      }
+    ]
   }
 }

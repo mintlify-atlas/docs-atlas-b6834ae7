@@ -1,0 +1,257 @@
+---
+title: "Configure MikroTik Router Connection Credentials"
+sidebarTitle: "MikroTik"
+description: "Add MikroTik router credentials to enable automatic Hotspot user creation, MAC cookie injection, and real-time profile retrieval."
+---
+
+The Pagos Hotspot API communicates directly with MikroTik routers over the RouterOS API protocol (port 8728 for plain TCP, port 8729 for SSL/TLS). After a card payment is approved, the API calls `POST /ip/hotspot/user/add` on the router to create a Hotspot user with a generated username and password (or PIN), then returns those credentials to the paying customer so they can connect to the WiFi portal immediately. Each router is registered in the database with the connection details needed to establish that live session.
+
+---
+
+## Required router data
+
+Each router record (`Router` model) stores the following connection fields:
+
+| Field | Type | Description |
+|---|---|---|
+| `nombre` | `string` | Human-readable label for this router |
+| `host` | `string` | IP address or hostname reachable from the API server |
+| `puerto` | `integer` | RouterOS API port (default: `8728`) |
+| `usuario` | `string` | RouterOS API username |
+| `password_encrypted` | `string` | RouterOS API password (encrypted at rest) |
+| `ubicacion` | `string` | Optional physical location note |
+
+<Note>
+  Port **8728** (plain TCP) or **8729** (SSL/TLS) must be reachable from the
+  server running the Pagos Hotspot API. If your MikroTik is behind NAT or a
+  firewall, open the appropriate port or set up a VPN tunnel between the server
+  and the router.
+</Note>
+
+---
+
+## Enabling the RouterOS API service
+
+Before registering a router, make sure the API service is enabled on the MikroTik device.
+
+<Steps>
+  <Step title="Open a terminal or WinBox session">
+    Connect to your MikroTik router via SSH or WinBox.
+  </Step>
+  <Step title="Enable the API service">
+    ```routeros
+    /ip service enable api
+    /ip service set api port=8728
+    ```
+    For SSL (port 8729):
+    ```routeros
+    /ip service enable api-ssl
+    /ip service set api-ssl port=8729
+    ```
+  </Step>
+  <Step title="Restrict access by IP (recommended)">
+    ```routeros
+    /ip service set api address=203.0.113.10/32
+    ```
+    Replace `203.0.113.10` with the public IP of your API server.
+  </Step>
+</Steps>
+
+---
+
+## Creating a dedicated API user on MikroTik
+
+<Tip>
+  Create a dedicated RouterOS user for the API instead of using the `admin`
+  account. The user needs **read** and **write** privileges on
+  `/ip/hotspot/user` (to create and delete Hotspot users) and
+  `/ip/hotspot/cookie` (for MAC cookie injection during auto-connect). A policy
+  of `read,write,api` is sufficient — you do not need `policy`, `password`, or
+  `reboot`.
+
+  ```routeros
+  /user group add name=hotspot-api policy=read,write,api
+  /user add name=pagos-api group=hotspot-api password=strongpassword
+  ```
+</Tip>
+
+---
+
+## Creating a router record (super admin)
+
+Super admins can create router records for any company. This is typically done during onboarding.
+
+```http
+POST /admin/empresas/{empresa_id}/routers
+```
+
+<ParamField path="empresa_id" type="string" required>
+  The ID of the company this router belongs to (e.g. `EMP_ABC1234567`).
+</ParamField>
+
+**Request body:**
+
+<ParamField body="nombre" type="string" required>
+  A descriptive label for this router (e.g. `"Sucursal Centro"`).
+</ParamField>
+
+<ParamField body="host" type="string" required>
+  IP address or hostname of the MikroTik router as reachable from the API
+  server.
+</ParamField>
+
+<ParamField body="puerto" type="integer" default="8728">
+  RouterOS API port. Use `8728` for plain TCP or `8729` for SSL/TLS.
+</ParamField>
+
+<ParamField body="usuario" type="string" required>
+  RouterOS username with API access.
+</ParamField>
+
+<ParamField body="password" type="string" required>
+  RouterOS password. Stored encrypted in the database.
+</ParamField>
+
+<ParamField body="ubicacion" type="string">
+  Optional physical location description (e.g. `"Piso 2, sala de espera"`).
+</ParamField>
+
+```bash
+curl -X POST https://api.example.com/admin/empresas/EMP_ABC1234567/routers \
+  -H "Authorization: Bearer <super_admin_session_token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "nombre": "Sucursal Centro",
+    "host": "192.168.88.1",
+    "puerto": 8728,
+    "usuario": "pagos-api",
+    "password": "strongpassword",
+    "ubicacion": "Piso 2, sala de espera"
+  }'
+```
+
+---
+
+## Updating a router (client admin)
+
+Company admins can update any router that belongs to their own company.
+
+```http
+PUT /api/v1/admin/mi-empresa/routers/{router_id}
+```
+
+<ParamField path="router_id" type="string" required>
+  UUID of the router to update. The router must belong to the authenticated
+  admin's company.
+</ParamField>
+
+Only fields present in the request body are updated. Unspecified fields retain
+their current values. If `puerto` is not provided it defaults to `8728`.
+
+```bash
+curl -X PUT https://api.example.com/api/v1/admin/mi-empresa/routers/abc123 \
+  -H "Authorization: Bearer <session_token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "host": "10.0.0.1",
+    "usuario": "pagos-api-v2",
+    "password_encrypted": "newpassword"
+  }'
+```
+
+---
+
+## Testing the connection
+
+Use this endpoint to verify that the API server can reach the router and authenticate successfully. This is useful after creating or updating router credentials.
+
+```http
+GET /api/v1/admin/routers/{router_id}/test-connection
+```
+
+```bash
+curl https://api.example.com/api/v1/admin/routers/abc123/test-connection \
+  -H "Authorization: Bearer <session_token>"
+```
+
+**Successful response:**
+
+```json
+{
+  "success": true,
+  "connected": true,
+  "router_name": "MikroTik-Sucursal-Centro",
+  "profiles_count": 4,
+  "profiles_sample": [
+    { "id": "*1", "name": "default" },
+    { "id": "*2", "name": "1hora" },
+    { "id": "*3", "name": "1dia" }
+  ]
+}
+```
+
+**Failed response:**
+
+```json
+{
+  "success": false,
+  "error": "No se pudo conectar al router: Timeout al conectar a 192.168.88.1:8728",
+  "connected": false
+}
+```
+
+---
+
+## Listing Hotspot profiles
+
+This endpoint connects to the live router, retrieves all configured Hotspot User Profiles, and returns their details. The profile names returned here are the values you must use when creating products (`perfil_mikrotik_nombre`).
+
+```http
+GET /api/v1/admin/routers/{router_id}/mikrotik-profiles
+```
+
+```bash
+curl https://api.example.com/api/v1/admin/routers/abc123/mikrotik-profiles \
+  -H "Authorization: Bearer <session_token>"
+```
+
+**Response:**
+
+```json
+[
+  {
+    "id": "*1",
+    "name": "default",
+    "session_timeout": null,
+    "idle_timeout": "5m",
+    "rate_limit": "2M/2M",
+    "address_list": "",
+    "shared_users": "1",
+    "keepalive_timeout": "2m",
+    "status_autorefresh": "1m",
+    "mac_cookie_timeout": "3d"
+  },
+  {
+    "id": "*2",
+    "name": "1hora",
+    "session_timeout": "1h",
+    "idle_timeout": "10m",
+    "rate_limit": "5M/5M",
+    "address_list": "",
+    "shared_users": "1",
+    "keepalive_timeout": "2m",
+    "status_autorefresh": null,
+    "mac_cookie_timeout": null
+  }
+]
+```
+
+The API reads these fields from RouterOS `/ip/hotspot/user/profile/print`:
+
+| Field | RouterOS key | Description |
+|---|---|---|
+| `session_timeout` | `session-timeout` | Maximum session duration before forced logout |
+| `idle_timeout` | `idle-timeout` | Inactivity timeout |
+| `rate_limit` | `rate-limit` | Download/upload bandwidth cap (e.g. `5M/5M`) |
+| `shared_users` | `shared-users` | Max concurrent logins with the same credentials |
+| `mac_cookie_timeout` | `mac-cookie-timeout` | Duration of the MAC cookie set for auto-reconnect |

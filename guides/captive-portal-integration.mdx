@@ -1,0 +1,378 @@
+---
+title: "Integrate Pagos Hotspot API into a MikroTik Captive Portal"
+sidebarTitle: "Captive Portal"
+description: "Step-by-step guide to building a MikroTik captive portal HTML page that lists plans, tokenizes cards with Conekta.js, and calls the payment API."
+---
+
+A MikroTik captive portal is typically a plain HTML page — hosted on the router itself or on an external web server — that MikroTik redirects unauthenticated clients to when they first join the network. The Pagos Hotspot API turns that static page into a full point-of-sale: fetch available plans, collect and tokenize a card, and hand back internet credentials in one round-trip. This guide covers every API call you need to implement and provides complete JavaScript examples.
+
+<Note>
+  The captive portal page runs entirely in the browser. Your server never sees raw card numbers — only a single-use token produced by Conekta.js or the Mercado Pago SDK on the client side.
+</Note>
+
+---
+
+## Overview: Three API Calls
+
+Every captive portal integration needs exactly three API interactions:
+
+<CardGroup cols={3}>
+  <Card title="1. Public Config" icon="key">
+    `GET /api/v1/config/public`
+
+    Fetches the payment gateway public keys. Call this once on page load.
+  </Card>
+  <Card title="2. Plan Catalog" icon="list">
+    `GET /api/v1/catalogo_perfiles_venta`
+
+    Lists the available internet plans for this router. Render them as selectable cards.
+  </Card>
+  <Card title="3. Process Payment" icon="credit-card">
+    `POST /api/v1/payments/pagar-conekta`
+    _or_
+    `POST /api/v1/payments/pagar-mercado-pago`
+
+    Submits the card token and triggers the full purchase flow.
+  </Card>
+</CardGroup>
+
+---
+
+## Getting the Client MAC and IP Address
+
+MikroTik injects the connecting device's MAC address and IP into the captive portal redirect URL using built-in variables. When it redirects to your portal page, the URL looks like:
+
+```
+https://portal.example.com/?mac=AA:BB:CC:DD:EE:FF&ip=192.168.88.100&ssid=WiFi-HotSpot
+```
+
+Parse these at page load with standard URL query parameter handling:
+
+```javascript
+const params = new URLSearchParams(window.location.search);
+const clientMac = params.get("mac") || "";
+const clientIp  = params.get("ip")  || "";
+const clientSsid = params.get("ssid") || "";
+
+console.log("Client MAC:", clientMac);
+console.log("Client IP:", clientIp);
+```
+
+These values are passed directly to the payment endpoint so the API can attempt an auto-connection after a successful purchase.
+
+---
+
+## Step 1 — Fetch Public Configuration
+
+Call this endpoint on page load to get the Conekta and Mercado Pago public keys. Do **not** hardcode keys in your portal HTML.
+
+<CodeGroup>
+```javascript Fetch API
+async function loadPublicConfig(apiKey) {
+  const response = await fetch("https://api.tuempresa.com/api/v1/config/public", {
+    headers: {
+      "X-API-Key": apiKey,
+      "Content-Type": "application/json"
+    }
+  });
+
+  if (!response.ok) {
+    throw new Error("No se pudo cargar la configuración");
+  }
+
+  const config = await response.json();
+  // config.conekta_public_key  → initialize Conekta.js
+  // config.mercadopago_public_key → initialize MP SDK
+  return config;
+}
+```
+
+```javascript Usage
+const config = await loadPublicConfig("jwt_eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...");
+Conekta.setPublicKey(config.conekta_public_key);
+```
+</CodeGroup>
+
+---
+
+## Step 2 — Load the Plan Catalog
+
+Fetch the list of available plans and render them for the customer to choose from.
+
+<CodeGroup>
+```javascript Fetch API
+async function loadCatalog(apiKey) {
+  const response = await fetch("https://api.tuempresa.com/api/v1/catalogo_perfiles_venta", {
+    headers: {
+      "X-API-Key": apiKey
+    }
+  });
+
+  if (!response.ok) {
+    throw new Error("No se pudo cargar el catálogo");
+  }
+
+  return await response.json(); // Array of plan objects
+}
+```
+
+```javascript Render Plans
+function renderPlans(plans, onSelect) {
+  const container = document.getElementById("plans-container");
+  container.innerHTML = "";
+
+  plans.forEach(plan => {
+    const card = document.createElement("div");
+    card.className = "plan-card" + (plan.destacado ? " featured" : "");
+    card.innerHTML = `
+      <h3>${plan.nombre_venta}</h3>
+      <p class="price">$${plan.precio} ${plan.moneda}</p>
+      <ul>
+        ${plan.detalles.map(d => `<li>${d.label}: ${d.value}</li>`).join("")}
+      </ul>
+      <button onclick="selectPlan(${plan.id})">Seleccionar</button>
+    `;
+    container.appendChild(card);
+  });
+}
+```
+</CodeGroup>
+
+---
+
+## Step 3 — Tokenize the Card
+
+Before calling the payment endpoint, the raw card data must be tokenized client-side by Conekta.js. The API never receives raw card numbers.
+
+```html
+<!-- Load Conekta.js -->
+<script src="https://cdn.conekta.io/js/latest/conekta.js"></script>
+```
+
+```javascript
+function tokenizeCard(cardData) {
+  return new Promise((resolve, reject) => {
+    Conekta.Token.create(
+      {
+        card: {
+          number:    cardData.number,
+          name:      cardData.name,
+          exp_year:  cardData.exp_year,    // e.g., "26"
+          exp_month: cardData.exp_month,   // e.g., "12"
+          cvc:       cardData.cvc
+        }
+      },
+      (token) => resolve(token.id),
+      (err)   => reject(new Error(err.message_to_purchaser || "Error al procesar tarjeta"))
+    );
+  });
+}
+```
+
+---
+
+## Step 4 — Process the Payment
+
+Submit the card token alongside the selected plan and the client's MAC/IP. Pass `auto_connect: true` to trigger automatic internet access after a successful charge.
+
+<CodeGroup>
+```javascript Conekta
+async function payWithConekta({ apiKey, productId, cardToken, customer, mac, ip }) {
+  const response = await fetch("https://api.tuempresa.com/api/v1/payments/pagar-conekta", {
+    method: "POST",
+    headers: {
+      "X-API-Key": apiKey,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      product_id:      productId,
+      card_token:      cardToken,
+      customer_name:   customer.name,
+      customer_email:  customer.email,
+      customer_phone:  customer.phone,
+      user_type:       "usuario_contrasena",
+      mac_address:     mac,
+      ip_address:      ip,
+      auto_connect:    true
+    })
+  });
+
+  if (!response.ok) {
+    const err = await response.json();
+    throw new Error(err.detail || "Error al procesar el pago");
+  }
+
+  return await response.json();
+}
+```
+
+```javascript Mercado Pago
+async function payWithMercadoPago({ apiKey, productId, mpToken, amount, customer, mac, ip, paymentData }) {
+  const response = await fetch("https://api.tuempresa.com/api/v1/payments/pagar-mercado-pago", {
+    method: "POST",
+    headers: {
+      "X-API-Key": apiKey,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      product_id:         productId,
+      token:              mpToken,
+      issuer_id:          paymentData.issuer_id,
+      payment_method_id:  paymentData.payment_method_id,
+      transaction_amount: amount,
+      installments:       1,
+      customer_name:      customer.name,
+      customer_email:     customer.email,
+      customer_phone:     customer.phone,
+      device_id:          paymentData.device_id,
+      payer:              { email: customer.email },
+      mac_address:        mac,
+      ip_address:         ip,
+      auto_connect:       true
+    })
+  });
+
+  if (!response.ok) {
+    const err = await response.json();
+    throw new Error(err.detail || "Error al procesar el pago");
+  }
+
+  return await response.json();
+}
+```
+</CodeGroup>
+
+---
+
+## Step 5 — Handle the Payment Response
+
+Once the API returns, check `auto_conexion.estado` to decide what to show the user.
+
+```javascript
+function handlePaymentResult(result) {
+  const { usuario_hotspot, auto_conexion, producto } = result;
+
+  if (auto_conexion.estado === "conectado") {
+    // Device is already online — show a success screen
+    showSuccessScreen({
+      message: "¡Ya estás conectado! Disfruta de " + producto.nombre,
+      credentials: usuario_hotspot // Show as backup in case they need to reconnect
+    });
+  } else {
+    // Not auto-connected — show credentials for manual login
+    showCredentialsScreen({
+      username: usuario_hotspot.usuario,
+      password: usuario_hotspot.contrasena,
+      message:  auto_conexion.mensaje
+    });
+  }
+
+  // Always persist credentials for future auto-reconnect attempts
+  localStorage.setItem("hs_username",   usuario_hotspot.usuario);
+  localStorage.setItem("hs_password",   usuario_hotspot.contrasena);
+  localStorage.setItem("hs_stored_mac", auto_conexion.mac || "");
+}
+```
+
+---
+
+## Returning User Flow — Auto-Reconnect on Page Load
+
+When the captive portal page loads, check `localStorage` for saved credentials. If found, attempt auto-reconnect before showing the purchase UI.
+
+```javascript
+async function tryAutoReconnect(apiKey, currentMac, currentIp) {
+  const username   = localStorage.getItem("hs_username");
+  const password   = localStorage.getItem("hs_password");
+  const storedMac  = localStorage.getItem("hs_stored_mac");
+
+  if (!username || !password) return false; // No saved session
+
+  try {
+    const response = await fetch("https://api.tuempresa.com/api/v1/hotspot/auto-reconnect", {
+      method: "POST",
+      headers: {
+        "X-API-Key": apiKey,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        username:    username,
+        password:    password,
+        stored_mac:  storedMac,
+        current_mac: currentMac,
+        current_ip:  currentIp
+      })
+    });
+
+    const data = await response.json();
+
+    if (data.auto_conexion === "conectado") {
+      showSuccessScreen({ message: "Reconectado exitosamente. ¡Bienvenido de vuelta!" });
+      return true;
+    }
+
+    if (data.estado === "expirado") {
+      // Plan expired — clear credentials and show the purchase UI
+      localStorage.removeItem("hs_username");
+      localStorage.removeItem("hs_password");
+      localStorage.removeItem("hs_stored_mac");
+    }
+
+    return false;
+  } catch (err) {
+    console.warn("Auto-reconnect failed:", err);
+    return false;
+  }
+}
+```
+
+**On page load:**
+
+```javascript
+(async () => {
+  const params     = new URLSearchParams(window.location.search);
+  const currentMac = params.get("mac") || "";
+  const currentIp  = params.get("ip")  || "";
+  const API_KEY    = "jwt_eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."; // from your backend config
+
+  const reconnected = await tryAutoReconnect(API_KEY, currentMac, currentIp);
+
+  if (!reconnected) {
+    // Load config and catalog for the purchase UI
+    const config = await loadPublicConfig(API_KEY);
+    Conekta.setPublicKey(config.conekta_public_key);
+
+    const plans = await loadCatalog(API_KEY);
+    renderPlans(plans);
+
+    showPurchaseUI();
+  }
+})();
+```
+
+---
+
+## CORS Configuration
+
+The API server must allow requests from your captive portal's origin. Add the portal domain to the `BACKEND_CORS_ORIGINS` environment variable on the API server.
+
+<Note>
+  If your portal is served directly from the MikroTik router (e.g., `http://192.168.88.1/`), add that IP to the CORS origins list. For externally hosted portals, add the full domain including protocol and port.
+
+  ```bash
+  BACKEND_CORS_ORIGINS=["https://portal.tuempresa.com","http://192.168.88.1"]
+  ```
+</Note>
+
+---
+
+## Test Card Numbers
+
+Use the following card numbers in Conekta's sandbox environment to test different scenarios without real charges:
+
+| Card Number | Result |
+|---|---|
+| `4242 4242 4242 4242` | Approved (`paid`) |
+| `4000 0000 0000 0002` | Declined |
+| CVV: `123` | Any of the above |
+| Expiry: Any future date | Any of the above |

@@ -1,0 +1,193 @@
+---
+title: "JWT Session Tokens for Admin Panel Access"
+sidebarTitle: "JWT Sessions"
+description: "Admin panel users authenticate with email and password to receive a 24-hour JWT session token. Covers login, logout, and password management."
+---
+
+Admin panel access — whether you are a platform operator (`super_admin`) or a company operator (`cliente_admin`) — is protected by short-lived JWT session tokens. You exchange your email and password for a token at login, include that token as a Bearer credential on every subsequent request, and re-authenticate when it expires. This page covers the complete session lifecycle: login, authenticated requests, password changes, logout, and how role enforcement works under the hood.
+
+<Note>
+  JWT session tokens are completely separate from Router API Keys. Session tokens are scoped to human admin users and travel in the `Authorization: Bearer` header. Router API Keys are scoped to MikroTik hardware and travel in the `X-API-Key` header. The two credentials are signed with different secrets and validated by different code paths — one cannot substitute for the other.
+</Note>
+
+---
+
+## Login
+
+Exchange your credentials for a session token by posting to `POST /api/v1/auth/login`.
+
+**Request:**
+
+```bash
+curl -X POST https://api.example.com/api/v1/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{
+    "email": "admin@empresa.com",
+    "password": "your_password"
+  }'
+```
+
+**Request body:**
+
+```json
+{
+  "email": "admin@empresa.com",
+  "password": "your_password"
+}
+```
+
+**Response:**
+
+```json
+{
+  "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMiIsInJvbCI6InN1cGVyX2FkbWluIiwiZXhwIjoxNzA5MDcyODAwLCJpYXQiOjE3MDg5ODY0MDAsInR5cGUiOiJhY2Nlc3NfdG9rZW4ifQ...",
+  "token_type": "bearer"
+}
+```
+
+The `access_token` is an HS256-signed JWT. Store it securely in your admin client (e.g. `localStorage`, an in-memory store, or an `HttpOnly` cookie). It is valid for **24 hours** from the moment of issuance (controlled by the `JWT_SESSION_EXPIRE_HOURS` environment variable, which defaults to `24`).
+
+---
+
+## Using the Token
+
+Include the token in the `Authorization` header on every admin request using the `Bearer` scheme:
+
+```bash
+curl -X GET https://api.example.com/admin/empresas \
+  -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+```
+
+If the token is missing, malformed, or expired the API returns `401 Unauthorized`. If the token is valid but the endpoint requires a higher-privilege role than the token's `rol` claim carries, the API returns `403 Forbidden`.
+
+---
+
+## Token Expiry and Re-authentication
+
+Session tokens are **not refreshable**. When the 24-hour window closes, the next request will return:
+
+```json
+{
+  "detail": "Token expirado"
+}
+```
+
+The user must call `POST /api/v1/auth/login` again with their credentials to obtain a new token. There is no refresh-token endpoint.
+
+<Tip>
+  Build your admin client to detect `401 Token expirado` responses and redirect the user to the login screen automatically. Storing the token issue time (`iat` claim, a Unix timestamp) lets you pre-emptively prompt re-login before the token actually expires.
+</Tip>
+
+---
+
+## Logout
+
+```bash
+curl -X POST https://api.example.com/api/v1/auth/logout \
+  -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+```
+
+**Response:**
+
+```json
+{
+  "message": "Sesión cerrada exitosamente"
+}
+```
+
+The logout endpoint is **stateless** — the server does not maintain a token blocklist. The endpoint simply confirms the token was valid and returns a success message. Actual session termination is the client's responsibility: discard the token from storage so it is no longer sent with future requests.
+
+---
+
+## Change Password
+
+A logged-in admin user can update their own password without `super_admin` intervention. Both the current password and the desired new password are required.
+
+```bash
+curl -X POST https://api.example.com/api/v1/auth/change-password \
+  -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..." \
+  -H "Content-Type: application/json" \
+  -d '{
+    "current_password": "old_password_here",
+    "new_password": "new_secure_password"
+  }'
+```
+
+**Response:**
+
+```json
+{
+  "message": "Contraseña actualizada exitosamente"
+}
+```
+
+If `current_password` does not match the stored bcrypt hash, the API returns `400 Contraseña actual incorrecta` and the password is not changed.
+
+<Note>
+  Changing your password does **not** invalidate your current session token — it remains valid until its natural expiry. If you suspect your credentials were compromised, coordinate with a `super_admin` to deactivate your account while you re-authenticate.
+</Note>
+
+---
+
+## Role Enforcement
+
+Every admin endpoint is protected by one of two FastAPI dependency functions defined in `app/core/auth.py`:
+
+### `require_super_admin`
+
+```python
+async def require_super_admin(
+    usuario: Usuario = Depends(AuthHandler.authenticate_user_session)
+) -> Usuario:
+    if usuario.rol != "super_admin":
+        raise HTTPException(status_code=403, detail="Se requiere rol SUPER_ADMIN")
+    return usuario
+```
+
+Used on all platform-level operations: creating companies, provisioning routers, managing API keys, and creating admin accounts.
+
+### `require_cliente_admin`
+
+```python
+async def require_cliente_admin(
+    usuario: Usuario = Depends(AuthHandler.authenticate_user_session)
+) -> Usuario:
+    if usuario.rol != "cliente_admin":
+        raise HTTPException(status_code=403, detail="Se requiere rol CLIENTE_ADMIN")
+    return usuario
+```
+
+Used on company-scoped operations: managing products, viewing transactions, and configuring payment gateways.
+
+Both dependencies call `AuthHandler.authenticate_user_session` first, which:
+
+1. Decodes the Bearer token using `JWT_SESSION_SECRET` and `JWT_ALGORITHM` (HS256).
+2. Extracts the `sub` claim (the user's integer ID) and fetches the `Usuario` record from the database.
+3. Confirms the user exists and `usuario.activo == true`.
+4. Returns the `Usuario` object to the role-check dependency.
+
+If any step fails, a `401` or `403` is raised before the endpoint handler is ever reached.
+
+---
+
+## Session Token Summary
+
+| Property | Value |
+|---|---|
+| Endpoint | `POST /api/v1/auth/login` |
+| Algorithm | HS256 |
+| Secret | `JWT_SESSION_SECRET` (env var) |
+| Default expiry | 24 hours (`JWT_SESSION_EXPIRE_HOURS`) |
+| Refreshable | No — re-login required |
+| Usage header | `Authorization: Bearer <token>` |
+| Roles supported | `super_admin`, `cliente_admin` |
+
+---
+
+## Auth Endpoint Reference
+
+| Method | Path | Auth required | Description |
+|---|---|---|---|
+| `POST` | `/api/v1/auth/login` | None | Exchange credentials for a session token |
+| `POST` | `/api/v1/auth/logout` | Session token | Confirm logout (client must discard token) |
+| `POST` | `/api/v1/auth/change-password` | Session token | Update the authenticated user's password |

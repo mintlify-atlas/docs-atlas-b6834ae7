@@ -1,0 +1,306 @@
+---
+title: "Super Admin: User Management Endpoints"
+sidebarTitle: "Users"
+description: "Create and manage super_admin and cliente_admin users, with role validation and per-company association."
+---
+
+Users authenticate with the Pagos Hotspot API and are assigned one of two roles: `super_admin` (platform operators with full access) or `cliente_admin` (company-scoped admins who manage their own company's products, payments, and router settings). Only `super_admin` users can create, list, or toggle the active state of any user.
+
+All endpoints in this section require `Authorization: Bearer <session_token>` for a user with the `super_admin` role.
+
+---
+
+## POST /admin/usuarios
+
+Creates a new user. The role determines whether `empresa_id` is required or forbidden.
+
+<Warning>
+  Role and `empresa_id` rules are strictly enforced:
+  - `cliente_admin` **requires** `empresa_id`. The company must already exist.
+  - `super_admin` **must not** have `empresa_id`. Passing one returns HTTP 400.
+</Warning>
+
+```bash cURL — Create a cliente_admin
+curl -X POST "https://api.example.com/admin/usuarios" \
+  -H "Authorization: Bearer <session_token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "email": "admin@parquecentral.mx",
+    "password": "SecurePass123!",
+    "nombre": "María González",
+    "rol": "cliente_admin",
+    "empresa_id": "EMP_3A9F1C0B2D"
+  }'
+```
+
+```bash cURL — Create a super_admin
+curl -X POST "https://api.example.com/admin/usuarios" \
+  -H "Authorization: Bearer <session_token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "email": "ops@platform.mx",
+    "password": "SuperSecure456!",
+    "nombre": "Carlos Ruiz",
+    "rol": "super_admin"
+  }'
+```
+
+### Request Body
+
+<ParamField body="email" type="string" required>
+  User's email address. Must be unique across the entire platform. Returns HTTP 400 if already registered.
+</ParamField>
+
+<ParamField body="password" type="string" required>
+  Plain-text password. Hashed server-side using bcrypt before storage. Never stored or returned in plain text.
+</ParamField>
+
+<ParamField body="nombre" type="string" required>
+  User's full display name.
+</ParamField>
+
+<ParamField body="rol" type="string" required>
+  User role. Must be exactly `"super_admin"` or `"cliente_admin"`. Any other value returns HTTP 400.
+</ParamField>
+
+<ParamField body="empresa_id" type="string">
+  Company to associate the user with.
+  - **Required** for `cliente_admin`. Must be an existing company ID.
+  - **Forbidden** for `super_admin`. Pass `null` or omit entirely.
+</ParamField>
+
+### Response
+
+```json cliente_admin Created
+{
+  "message": "Usuario creado exitosamente",
+  "usuario": {
+    "id": 7,
+    "email": "admin@parquecentral.mx",
+    "nombre": "María González",
+    "rol": "cliente_admin",
+    "empresa_id": "EMP_3A9F1C0B2D",
+    "activo": true
+  }
+}
+```
+
+```json super_admin Created
+{
+  "message": "Usuario creado exitosamente",
+  "usuario": {
+    "id": 8,
+    "email": "ops@platform.mx",
+    "nombre": "Carlos Ruiz",
+    "rol": "super_admin",
+    "empresa_id": null,
+    "activo": true
+  }
+}
+```
+
+### Error Responses
+
+| Status | Detail |
+|--------|--------|
+| `400`  | `"Rol inválido. Debe ser 'super_admin' o 'cliente_admin'"` |
+| `400`  | `"cliente_admin requiere empresa_id"` |
+| `400`  | `"super_admin no debe tener empresa_id"` |
+| `400`  | `"El email ya está registrado"` |
+| `404`  | `"Empresa no encontrada"` |
+
+---
+
+## GET /admin/usuarios
+
+Returns all users in the system. Supports optional filtering by role and/or company.
+
+```bash cURL — All users
+curl -X GET "https://api.example.com/admin/usuarios" \
+  -H "Authorization: Bearer <session_token>"
+```
+
+```bash cURL — Filter by company
+curl -X GET "https://api.example.com/admin/usuarios?empresa_id=EMP_3A9F1C0B2D" \
+  -H "Authorization: Bearer <session_token>"
+```
+
+```bash cURL — Filter by role
+curl -X GET "https://api.example.com/admin/usuarios?rol=cliente_admin" \
+  -H "Authorization: Bearer <session_token>"
+```
+
+### Query Parameters
+
+<ParamField query="rol" type="string">
+  Filter users by role. Accepted values: `"super_admin"`, `"cliente_admin"`. Omit to return all roles.
+</ParamField>
+
+<ParamField query="empresa_id" type="string">
+  Filter users belonging to a specific company. Can be combined with `rol`.
+</ParamField>
+
+### Response
+
+Returns an array of `UserResponse` objects.
+
+<ResponseField name="id" type="integer" required>
+  Auto-incremented user ID.
+</ResponseField>
+
+<ResponseField name="email" type="string" required>
+  User's email address.
+</ResponseField>
+
+<ResponseField name="nombre" type="string" required>
+  User's display name.
+</ResponseField>
+
+<ResponseField name="rol" type="string" required>
+  User role: `"super_admin"` or `"cliente_admin"`.
+</ResponseField>
+
+<ResponseField name="empresa_id" type="string">
+  Associated company ID. Always `null` for `super_admin` users.
+</ResponseField>
+
+<ResponseField name="activo" type="boolean" required>
+  Whether the user account is currently active. Inactive users cannot log in.
+</ResponseField>
+
+```json Example Response
+[
+  {
+    "id": 7,
+    "email": "admin@parquecentral.mx",
+    "nombre": "María González",
+    "rol": "cliente_admin",
+    "empresa_id": "EMP_3A9F1C0B2D",
+    "activo": true
+  },
+  {
+    "id": 8,
+    "email": "ops@platform.mx",
+    "nombre": "Carlos Ruiz",
+    "rol": "super_admin",
+    "empresa_id": null,
+    "activo": true
+  },
+  {
+    "id": 3,
+    "email": "old@lospinos.mx",
+    "nombre": "Desactivado",
+    "rol": "cliente_admin",
+    "empresa_id": "EMP_7B2E4F1A9C",
+    "activo": false
+  }
+]
+```
+
+---
+
+## GET /admin/usuarios/{usuario_id}
+
+Returns a single user by their numeric database ID.
+
+```bash cURL
+curl -X GET "https://api.example.com/admin/usuarios/7" \
+  -H "Authorization: Bearer <session_token>"
+```
+
+### Path Parameters
+
+<ParamField path="usuario_id" type="integer" required>
+  Numeric user ID.
+</ParamField>
+
+### Response
+
+Returns a single `UserResponse` object. Returns HTTP 404 if the user does not exist.
+
+```json Example Response
+{
+  "id": 7,
+  "email": "admin@parquecentral.mx",
+  "nombre": "María González",
+  "rol": "cliente_admin",
+  "empresa_id": "EMP_3A9F1C0B2D",
+  "activo": true
+}
+```
+
+---
+
+## PUT /admin/usuarios/{usuario_id}/toggle-activo
+
+Toggles the active/inactive state of a user. Deactivated users lose the ability to log in immediately — their existing sessions are not invalidated, but they cannot obtain new tokens.
+
+<Warning>
+  A super admin **cannot deactivate their own account**. Attempting to do so returns HTTP 400. This prevents accidental lockout of the platform.
+</Warning>
+
+```bash cURL
+curl -X PUT "https://api.example.com/admin/usuarios/7/toggle-activo" \
+  -H "Authorization: Bearer <session_token>"
+```
+
+### Path Parameters
+
+<ParamField path="usuario_id" type="integer" required>
+  Numeric ID of the user to activate or deactivate.
+</ParamField>
+
+### Response
+
+```json User Deactivated
+{
+  "message": "Usuario desactivado",
+  "usuario_id": 7,
+  "activo": false
+}
+```
+
+```json User Activated
+{
+  "message": "Usuario activado",
+  "usuario_id": 7,
+  "activo": true
+}
+```
+
+### Error Responses
+
+| Status | Detail |
+|--------|--------|
+| `400`  | `"No puedes desactivar tu propio usuario"` |
+| `404`  | `"Usuario no encontrado"` |
+
+---
+
+## UserResponse Fields
+
+All user-returning endpoints share the same `UserResponse` schema:
+
+<ResponseField name="id" type="integer" required>
+  Auto-incremented numeric user ID.
+</ResponseField>
+
+<ResponseField name="email" type="string" required>
+  User's email address. Unique across the platform.
+</ResponseField>
+
+<ResponseField name="nombre" type="string" required>
+  User's full display name.
+</ResponseField>
+
+<ResponseField name="rol" type="string" required>
+  One of `"super_admin"` or `"cliente_admin"`.
+</ResponseField>
+
+<ResponseField name="empresa_id" type="string">
+  Company association. `null` for `super_admin` users, a valid company ID (e.g. `EMP_3A9F1C0B2D`) for `cliente_admin` users.
+</ResponseField>
+
+<ResponseField name="activo" type="boolean" required>
+  `true` if the user can log in, `false` if deactivated.
+</ResponseField>

@@ -1,0 +1,606 @@
+---
+title: "Super Admin: Router and API Key Management"
+sidebarTitle: "Routers"
+description: "Super admin endpoints to create routers, manage their API Keys (generate, revoke, rotate), and monitor key usage and expiry."
+---
+
+Routers are the physical MikroTik devices that serve as WiFi hotspot gateways for each tenant company. When a router is created, the API automatically generates a **JWT-based API Key** (prefixed with `jwt_`) that the captive portal uses to authenticate payment and hotspot creation requests. The full API Key is only returned at creation or regeneration time — it is never stored in plain text.
+
+All endpoints in this section require `Authorization: Bearer <session_token>` for a user with the `super_admin` role.
+
+<Warning>
+  The `api_key` field in the router creation and regeneration responses is shown **only once**. Store it securely immediately after the request. It cannot be retrieved again — only revoked and replaced.
+</Warning>
+
+---
+
+## POST /admin/empresas/{empresa_id}/routers
+
+Creates a new router for the specified company and automatically generates a JWT API Key. The full `jwt_` token is returned in the response body and must be delivered to the client for use in their captive portal.
+
+```bash cURL
+curl -X POST "https://api.example.com/admin/empresas/EMP_3A9F1C0B2D/routers" \
+  -H "Authorization: Bearer <session_token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "empresa_id": "EMP_3A9F1C0B2D",
+    "nombre": "Router Principal",
+    "host": "192.168.88.1",
+    "puerto": 8728,
+    "usuario": "admin",
+    "password": "secure_password",
+    "ubicacion": "Lobby Piso 1"
+  }'
+```
+
+### Path Parameters
+
+<ParamField path="empresa_id" type="string" required>
+  Company ID that will own this router, e.g. `EMP_3A9F1C0B2D`. Must be an existing active company.
+</ParamField>
+
+### Request Body
+
+<ParamField body="empresa_id" type="string" required>
+  Must match the `empresa_id` path parameter.
+</ParamField>
+
+<ParamField body="nombre" type="string" required>
+  Display name for the router, e.g. `"Router Principal"`.
+</ParamField>
+
+<ParamField body="host" type="string" required>
+  IP address or hostname of the MikroTik device, e.g. `"192.168.88.1"`.
+</ParamField>
+
+<ParamField body="puerto" type="integer" default="8728">
+  MikroTik API port. Default is `8728` (plaintext API). Use `8729` for encrypted API-SSL.
+</ParamField>
+
+<ParamField body="usuario" type="string" required>
+  MikroTik API username.
+</ParamField>
+
+<ParamField body="password" type="string" required>
+  MikroTik API password. Stored directly in the database (`password_encrypted` column) and used by the server to connect to the router.
+</ParamField>
+
+<ParamField body="ubicacion" type="string">
+  Optional human-readable physical location, e.g. `"Lobby Piso 1"`.
+</ParamField>
+
+### Response
+
+<ResponseField name="id" type="string" required>
+  Auto-generated router ID in the format `RTR_` + 8 uppercase hex characters, e.g. `RTR_A1B2C3D4`.
+</ResponseField>
+
+<ResponseField name="empresa_id" type="string" required>
+  Company that owns this router.
+</ResponseField>
+
+<ResponseField name="nombre" type="string" required>
+  Router display name.
+</ResponseField>
+
+<ResponseField name="host" type="string" required>
+  MikroTik device IP/hostname.
+</ResponseField>
+
+<ResponseField name="puerto" type="integer" required>
+  API port number.
+</ResponseField>
+
+<ResponseField name="ubicacion" type="string">
+  Physical location, or `null` if not provided.
+</ResponseField>
+
+<ResponseField name="activo" type="boolean" required>
+  Always `true` on creation.
+</ResponseField>
+
+<ResponseField name="api_key" type="string" required>
+  **The full JWT API Key** — shown only once. Starts with `jwt_`. Deliver this to the client for use in their captive portal's `X-API-Key` header.
+</ResponseField>
+
+<ResponseField name="api_key_info" type="object" required>
+  <Expandable title="api_key_info fields">
+    <ResponseField name="key_id" type="string">Unique key identifier, e.g. `"key_a1b2c3d4e5f6g7h8"`.</ResponseField>
+    <ResponseField name="issued_at" type="string (ISO 8601)">When the key was generated.</ResponseField>
+    <ResponseField name="expires_at" type="string (ISO 8601)">When the key expires (typically 1 year from creation).</ResponseField>
+    <ResponseField name="type" type="string">Always `"router_api_key"`.</ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="creado_en" type="string (ISO 8601)" required>
+  Router creation timestamp.
+</ResponseField>
+
+```json Example Response
+{
+  "id": "RTR_A1B2C3D4",
+  "empresa_id": "EMP_3A9F1C0B2D",
+  "nombre": "Router Principal",
+  "host": "192.168.88.1",
+  "puerto": 8728,
+  "ubicacion": "Lobby Piso 1",
+  "activo": true,
+  "api_key": "jwt_eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiJrZXlfYTFiMmMzZDRlNWY2ZzdoOCIsImlzcyI6Im1pa3JvdGlrLXBheW1lbnQtYXBpIiwic3ViIjoiUlRSX0ExQjJDM0Q0IiwiZW1wcmVzYSI6IkVNUF8zQTlGMUMwQjJEIn0.signature",
+  "api_key_info": {
+    "key_id": "key_a1b2c3d4e5f6g7h8",
+    "issued_at": "2025-01-15T09:00:00",
+    "expires_at": "2026-01-15T09:00:00",
+    "type": "router_api_key"
+  },
+  "creado_en": "2025-01-15T09:00:00.123456"
+}
+```
+
+---
+
+## GET /admin/empresas/{empresa_id}/routers
+
+Lists all routers belonging to a company. Does not include API Key values.
+
+```bash cURL
+curl -X GET "https://api.example.com/admin/empresas/EMP_3A9F1C0B2D/routers" \
+  -H "Authorization: Bearer <session_token>"
+```
+
+### Path Parameters
+
+<ParamField path="empresa_id" type="string" required>
+  Company ID to list routers for.
+</ParamField>
+
+### Response
+
+Returns an array of `RouterResponse` objects (without `api_key`).
+
+```json Example Response
+[
+  {
+    "id": "RTR_A1B2C3D4",
+    "empresa_id": "EMP_3A9F1C0B2D",
+    "nombre": "Router Principal",
+    "host": "192.168.88.1",
+    "puerto": 8728,
+    "ubicacion": "Lobby Piso 1",
+    "activo": true,
+    "creado_en": "2025-01-15T09:00:00"
+  }
+]
+```
+
+---
+
+## GET /admin/empresas/{empresa_id}/routers/{router_id}
+
+Returns detailed information for a specific router. Verifies the router belongs to the specified company.
+
+```bash cURL
+curl -X GET "https://api.example.com/admin/empresas/EMP_3A9F1C0B2D/routers/RTR_A1B2C3D4" \
+  -H "Authorization: Bearer <session_token>"
+```
+
+### Path Parameters
+
+<ParamField path="empresa_id" type="string" required>
+  Company ID.
+</ParamField>
+
+<ParamField path="router_id" type="string" required>
+  Router ID to retrieve.
+</ParamField>
+
+### Response
+
+Returns a single `RouterResponse` object. Returns HTTP 404 if the router does not exist or belongs to a different company.
+
+---
+
+## PUT /admin/empresas/{empresa_id}/routers/{router_id}/toggle-activo
+
+Toggles the active/inactive state of a router. Inactive routers cannot process payments or be used to create hotspot users.
+
+```bash cURL
+curl -X PUT "https://api.example.com/admin/empresas/EMP_3A9F1C0B2D/routers/RTR_A1B2C3D4/toggle-activo" \
+  -H "Authorization: Bearer <session_token>"
+```
+
+### Path Parameters
+
+<ParamField path="empresa_id" type="string" required>
+  Company ID.
+</ParamField>
+
+<ParamField path="router_id" type="string" required>
+  Router ID to toggle.
+</ParamField>
+
+### Response
+
+```json Router Activated
+{
+  "message": "Router activado correctamente",
+  "router_id": "RTR_A1B2C3D4",
+  "activo": true
+}
+```
+
+```json Router Deactivated
+{
+  "message": "Router desactivado correctamente",
+  "router_id": "RTR_A1B2C3D4",
+  "activo": false
+}
+```
+
+---
+
+## POST /admin/empresas/{empresa_id}/routers/{router_id}/regenerate-api-key
+
+Revokes the current API Key and issues a new one. Use this when a client loses or compromises their API Key. The previous key stops working immediately.
+
+<Warning>
+  The new `new_api_key` value is shown **only in this response**. It cannot be retrieved again. If you lose it, you must regenerate again.
+</Warning>
+
+```bash cURL
+curl -X POST "https://api.example.com/admin/empresas/EMP_3A9F1C0B2D/routers/RTR_A1B2C3D4/regenerate-api-key" \
+  -H "Authorization: Bearer <session_token>"
+```
+
+### Path Parameters
+
+<ParamField path="empresa_id" type="string" required>
+  Company ID.
+</ParamField>
+
+<ParamField path="router_id" type="string" required>
+  Router ID whose key should be rotated. The router must be active (`activo = true`).
+</ParamField>
+
+### Response
+
+<ResponseField name="message" type="string" required>
+  Always `"API Key regenerada exitosamente"` on success.
+</ResponseField>
+
+<ResponseField name="router_id" type="string" required>
+  The router whose key was regenerated.
+</ResponseField>
+
+<ResponseField name="new_api_key" type="string" required>
+  The new full API Key including the `jwt_` prefix. Shown only once.
+</ResponseField>
+
+<ResponseField name="api_key_info" type="object" required>
+  <Expandable title="api_key_info fields">
+    <ResponseField name="key_id" type="string">New key identifier.</ResponseField>
+    <ResponseField name="issued_at" type="string (ISO 8601)">When the new key was issued.</ResponseField>
+    <ResponseField name="expires_at" type="string (ISO 8601)">When the new key expires.</ResponseField>
+    <ResponseField name="type" type="string">Always `"router_api_key"`.</ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="previous_key_revoked" type="boolean" required>
+  `true` if a previous active key was found and revoked. `false` if there was no active key to revoke.
+</ResponseField>
+
+```json Example Response
+{
+  "message": "API Key regenerada exitosamente",
+  "router_id": "RTR_A1B2C3D4",
+  "new_api_key": "jwt_eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiJrZXlfbmV3a2V5aWQxMjM0NTYifQ.new_signature",
+  "api_key_info": {
+    "key_id": "key_newkeyid123456",
+    "issued_at": "2025-01-15T15:00:00",
+    "expires_at": "2026-01-15T15:00:00",
+    "type": "router_api_key"
+  },
+  "previous_key_revoked": true
+}
+```
+
+### Error Responses
+
+| Status | Detail |
+|--------|--------|
+| `400`  | `"No se puede regenerar API key de un router inactivo"` |
+| `404`  | Router not found or does not belong to the company |
+
+---
+
+## GET /admin/empresas/{empresa_id}/routers/{router_id}/api-keys
+
+Returns the complete history of all API Keys (active and revoked) for a router, ordered by issuance date descending. Useful for auditing key rotations and detecting suspicious activity.
+
+```bash cURL
+curl -X GET "https://api.example.com/admin/empresas/EMP_3A9F1C0B2D/routers/RTR_A1B2C3D4/api-keys" \
+  -H "Authorization: Bearer <session_token>"
+```
+
+### Path Parameters
+
+<ParamField path="empresa_id" type="string" required>
+  Company ID.
+</ParamField>
+
+<ParamField path="router_id" type="string" required>
+  Router ID to fetch key history for.
+</ParamField>
+
+### Response
+
+Returns an array of `RouterAPIKeyInfo` objects.
+
+<ResponseField name="key_id" type="string" required>
+  Unique key identifier, e.g. `"key_a1b2c3d4e5f6g7h8"`.
+</ResponseField>
+
+<ResponseField name="router_id" type="string" required>
+  Router this key was issued for.
+</ResponseField>
+
+<ResponseField name="empresa_id" type="string" required>
+  Company this key belongs to.
+</ResponseField>
+
+<ResponseField name="issued_at" type="string (ISO 8601)" required>
+  When the key was generated.
+</ResponseField>
+
+<ResponseField name="expires_at" type="string (ISO 8601)" required>
+  When the key expires or expired.
+</ResponseField>
+
+<ResponseField name="revoked" type="boolean" required>
+  `true` if the key has been manually revoked.
+</ResponseField>
+
+<ResponseField name="revoked_at" type="string (ISO 8601)">
+  Timestamp of revocation. `null` if never revoked.
+</ResponseField>
+
+<ResponseField name="last_used" type="string (ISO 8601)">
+  Timestamp of the most recent successful API call made with this key. `null` if the key has never been used.
+</ResponseField>
+
+<ResponseField name="use_count" type="integer">
+  Total number of successful authenticated requests made with this key. Defaults to `0`.
+</ResponseField>
+
+```json Example Response
+[
+  {
+    "key_id": "key_newkeyid123456",
+    "router_id": "RTR_A1B2C3D4",
+    "empresa_id": "EMP_3A9F1C0B2D",
+    "issued_at": "2025-01-15T15:00:00",
+    "expires_at": "2026-01-15T15:00:00",
+    "revoked": false,
+    "revoked_at": null,
+    "last_used": "2025-01-15T16:30:00",
+    "use_count": 5
+  },
+  {
+    "key_id": "key_a1b2c3d4e5f6g7h8",
+    "router_id": "RTR_A1B2C3D4",
+    "empresa_id": "EMP_3A9F1C0B2D",
+    "issued_at": "2025-01-10T09:00:00",
+    "expires_at": "2026-01-10T09:00:00",
+    "revoked": true,
+    "revoked_at": "2025-01-15T15:00:00",
+    "last_used": "2025-01-15T14:55:00",
+    "use_count": 87
+  }
+]
+```
+
+---
+
+## POST /admin/empresas/{empresa_id}/routers/{router_id}/api-keys/{key_id}/revoke
+
+Revokes a specific API Key by its `key_id` without issuing a new one. Use this when a key is suspected to have been compromised and you need to block it before generating a replacement via `regenerate-api-key`.
+
+```bash cURL
+curl -X POST "https://api.example.com/admin/empresas/EMP_3A9F1C0B2D/routers/RTR_A1B2C3D4/api-keys/key_a1b2c3d4e5f6g7h8/revoke" \
+  -H "Authorization: Bearer <session_token>"
+```
+
+### Path Parameters
+
+<ParamField path="empresa_id" type="string" required>
+  Company ID.
+</ParamField>
+
+<ParamField path="router_id" type="string" required>
+  Router ID.
+</ParamField>
+
+<ParamField path="key_id" type="string" required>
+  Key ID to revoke, e.g. `"key_a1b2c3d4e5f6g7h8"`. Obtain from the [GET api-keys](#get-adminempresasempresa_idroutersrouter_idapi-keys) endpoint.
+</ParamField>
+
+### Response
+
+```json
+{
+  "message": "API Key revocada exitosamente",
+  "key_id": "key_a1b2c3d4e5f6g7h8",
+  "router_id": "RTR_A1B2C3D4",
+  "revoked_at": "2025-01-15T16:00:00.123456"
+}
+```
+
+### Error Responses
+
+| Status | Detail |
+|--------|--------|
+| `400`  | `"La API Key ya está revocada"` |
+| `404`  | API Key not found for this router/company |
+
+---
+
+## GET /admin/empresas/{empresa_id}/routers/{router_id}/api-key-status
+
+Returns the status of the currently active API Key for a router, including expiry information and usage warnings. Use this for health monitoring dashboards.
+
+```bash cURL
+curl -X GET "https://api.example.com/admin/empresas/EMP_3A9F1C0B2D/routers/RTR_A1B2C3D4/api-key-status" \
+  -H "Authorization: Bearer <session_token>"
+```
+
+### Path Parameters
+
+<ParamField path="empresa_id" type="string" required>
+  Company ID.
+</ParamField>
+
+<ParamField path="router_id" type="string" required>
+  Router ID to check.
+</ParamField>
+
+### Response
+
+<ResponseField name="router_id" type="string" required>
+  The router ID checked.
+</ResponseField>
+
+<ResponseField name="has_active_key" type="boolean" required>
+  `true` if there is a non-revoked, non-expired key. `false` otherwise.
+</ResponseField>
+
+<ResponseField name="key_id" type="string">
+  Active key identifier. `null` if no active key exists.
+</ResponseField>
+
+<ResponseField name="issued_at" type="string (ISO 8601)">
+  When the active key was issued.
+</ResponseField>
+
+<ResponseField name="expires_at" type="string (ISO 8601)">
+  When the active key expires.
+</ResponseField>
+
+<ResponseField name="expires_in_days" type="integer">
+  Remaining days until expiry. A warning is set when this value is below 30.
+</ResponseField>
+
+<ResponseField name="last_used" type="string (ISO 8601)">
+  Last time the key was used successfully.
+</ResponseField>
+
+<ResponseField name="use_count" type="integer">
+  Total authenticated requests made with the active key.
+</ResponseField>
+
+<ResponseField name="status" type="string">
+  `"active"` if a valid key exists, `"no_key"` if none found.
+</ResponseField>
+
+<ResponseField name="warning" type="string">
+  Advisory message, e.g. `"La API Key expira en 15 días"` or `"Esta API Key nunca ha sido usada"`. `null` if no warnings.
+</ResponseField>
+
+<ResponseField name="recommendation" type="string">
+  Suggested action, e.g. `"Considerar regenerar la API Key pronto"`. `null` if no recommendation.
+</ResponseField>
+
+<ResponseField name="message" type="string">
+  Set to `"No hay API Key activa para este router"` when `has_active_key` is `false`.
+</ResponseField>
+
+```json Active Key — No Warnings
+{
+  "router_id": "RTR_A1B2C3D4",
+  "has_active_key": true,
+  "key_id": "key_newkeyid123456",
+  "issued_at": "2025-01-15T15:00:00",
+  "expires_at": "2026-01-15T15:00:00",
+  "expires_in_days": 364,
+  "last_used": "2025-01-15T16:30:00",
+  "use_count": 42,
+  "status": "active",
+  "warning": null,
+  "recommendation": null,
+  "message": null
+}
+```
+
+```json Active Key — Expiring Soon
+{
+  "router_id": "RTR_A1B2C3D4",
+  "has_active_key": true,
+  "key_id": "key_oldkeyid999888",
+  "issued_at": "2024-01-20T10:00:00",
+  "expires_at": "2025-01-30T10:00:00",
+  "expires_in_days": 15,
+  "last_used": "2025-01-15T08:00:00",
+  "use_count": 1240,
+  "status": "active",
+  "warning": "La API Key expira en 15 días",
+  "recommendation": "Considerar regenerar la API Key pronto",
+  "message": null
+}
+```
+
+```json No Active Key
+{
+  "router_id": "RTR_A1B2C3D4",
+  "has_active_key": false,
+  "key_id": null,
+  "issued_at": null,
+  "expires_at": null,
+  "expires_in_days": null,
+  "last_used": null,
+  "use_count": 0,
+  "status": "no_key",
+  "warning": null,
+  "recommendation": "Generar una nueva API Key",
+  "message": "No hay API Key activa para este router"
+}
+```
+
+---
+
+## DELETE /admin/empresas/{empresa_id}/routers/{router_id}
+
+Permanently deletes a router and all its associated API Key tracking records. This action is **irreversible**.
+
+<Warning>
+  Deletion fails with HTTP 400 if the router has any products associated with it. You must delete or reassign all products before deleting the router. Transactions referencing this router remain in the database.
+</Warning>
+
+```bash cURL
+curl -X DELETE "https://api.example.com/admin/empresas/EMP_3A9F1C0B2D/routers/RTR_A1B2C3D4" \
+  -H "Authorization: Bearer <session_token>"
+```
+
+### Path Parameters
+
+<ParamField path="empresa_id" type="string" required>
+  Company ID.
+</ParamField>
+
+<ParamField path="router_id" type="string" required>
+  Router ID to delete permanently.
+</ParamField>
+
+### Response
+
+```json
+{
+  "message": "Router eliminado exitosamente",
+  "router_id": "RTR_A1B2C3D4",
+  "empresa_id": "EMP_3A9F1C0B2D"
+}
+```
+
+### Error Responses
+
+| Status | Detail |
+|--------|--------|
+| `400`  | `"No se puede eliminar el router porque tiene N producto(s) asociado(s)"` |
+| `404`  | Router not found or does not belong to the company |

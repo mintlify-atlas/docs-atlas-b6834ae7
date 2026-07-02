@@ -1,0 +1,233 @@
+---
+title: "Transaction History and Dashboard Endpoints"
+sidebarTitle: "Transactions"
+description: "Access paginated transaction history and company dashboard stats showing total revenue, payment counts, and recent activity."
+---
+
+Transactions are created automatically when a customer completes (or attempts) a payment through the captive portal. These read-only endpoints give client admins visibility into payment activity, revenue totals, and recent events — without requiring access to the payment gateway dashboard.
+
+All endpoints require `Authorization: Bearer <session_token>` for a `cliente_admin` user.
+
+---
+
+## GET /api/v1/admin/mi-empresa/transacciones
+
+Returns a paginated list of all transactions for the authenticated company, sorted by creation date descending (most recent first).
+
+```bash cURL
+curl -X GET "https://api.example.com/api/v1/admin/mi-empresa/transacciones?limit=20&offset=0" \
+  -H "Authorization: Bearer <session_token>"
+```
+
+### Query Parameters
+
+<ParamField query="limit" type="integer" default="50">
+  Maximum number of transactions to return. Use together with `offset` to page through large result sets.
+</ParamField>
+
+<ParamField query="offset" type="integer" default="0">
+  Number of records to skip before returning results. For example, to fetch page 3 with 20 items per page: `offset=40&limit=20`.
+</ParamField>
+
+### Response
+
+<ResponseField name="empresa_id" type="string" required>
+  The company ID that owns these transactions.
+</ResponseField>
+
+<ResponseField name="total" type="integer" required>
+  Total number of transactions in the database for this company (across all pages). Use this to calculate total page count.
+</ResponseField>
+
+<ResponseField name="limit" type="integer" required>
+  The `limit` value applied to this response.
+</ResponseField>
+
+<ResponseField name="offset" type="integer" required>
+  The `offset` value applied to this response.
+</ResponseField>
+
+<ResponseField name="transacciones" type="array" required>
+  Array of transaction objects.
+  <Expandable title="transaction object fields">
+    <ResponseField name="id" type="integer">Internal auto-incremented database ID.</ResponseField>
+    <ResponseField name="transaccion_id" type="string">
+      Unique transaction reference string. For Conekta payments this is the Conekta Order ID (e.g. `"ord_2xxxxxxxxxxxxxb"`). For Mercado Pago this is derived from the preference/payment ID.
+    </ResponseField>
+    <ResponseField name="monto" type="number">Transaction amount as a float, e.g. `50.0`.</ResponseField>
+    <ResponseField name="estado_pago" type="string">
+      Payment state. See [Payment States](#payment-states) below.
+    </ResponseField>
+    <ResponseField name="cliente_nombre" type="string">
+      Name provided by the customer at checkout. May be `null` if not collected.
+    </ResponseField>
+    <ResponseField name="creada_en" type="string (ISO 8601)">
+      Timestamp when the transaction record was created.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+```json Example Response
+{
+  "empresa_id": "EMP_3A9F1C0B2D",
+  "total": 142,
+  "limit": 20,
+  "offset": 0,
+  "transacciones": [
+    {
+      "id": 142,
+      "transaccion_id": "ord_2xxxxxxxxxxxxxb",
+      "monto": 50.0,
+      "estado_pago": "paid",
+      "cliente_nombre": "Juan Pérez",
+      "creada_en": "2025-01-15T14:32:10.123456"
+    },
+    {
+      "id": 141,
+      "transaccion_id": "ord_2xxxxxxxxxxxxxc",
+      "monto": 10.0,
+      "estado_pago": "paid",
+      "cliente_nombre": "Ana López",
+      "creada_en": "2025-01-15T13:10:05.654321"
+    },
+    {
+      "id": 140,
+      "transaccion_id": "pref_1234567890",
+      "monto": 50.0,
+      "estado_pago": "pending",
+      "cliente_nombre": "Carlos Ramos",
+      "creada_en": "2025-01-15T12:00:00.000000"
+    }
+  ]
+}
+```
+
+### Pagination Example
+
+```bash cURL — Page 2 (items 21–40)
+curl -X GET "https://api.example.com/api/v1/admin/mi-empresa/transacciones?limit=20&offset=20" \
+  -H "Authorization: Bearer <session_token>"
+```
+
+---
+
+## GET /api/v1/admin/mi-empresa/dashboard
+
+Returns a summary of company activity: aggregate statistics computed from all transactions plus the 5 most recent transactions. Designed for the main admin dashboard view.
+
+```bash cURL
+curl -X GET "https://api.example.com/api/v1/admin/mi-empresa/dashboard" \
+  -H "Authorization: Bearer <session_token>"
+```
+
+### Response
+
+<ResponseField name="empresa" type="object" required>
+  <Expandable title="empresa fields">
+    <ResponseField name="nombre" type="string">Company display name.</ResponseField>
+    <ResponseField name="activa" type="boolean">Whether the company account is active.</ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="estadisticas" type="object" required>
+  <Expandable title="estadisticas fields">
+    <ResponseField name="total_transacciones" type="integer">
+      Total number of transactions created for this company (all states combined).
+    </ResponseField>
+    <ResponseField name="ingresos_totales" type="number">
+      Sum of `monto` across **all** transactions regardless of payment state. Filter by `transacciones_pagadas` for confirmed revenue.
+    </ResponseField>
+    <ResponseField name="transacciones_pagadas" type="integer">
+      Count of transactions where `estado_pago = "paid"` (Conekta confirmed payments).
+    </ResponseField>
+    <ResponseField name="transacciones_pendientes" type="integer">
+      Count of transactions where `estado_pago = "pending"`.
+    </ResponseField>
+    <ResponseField name="total_routers" type="integer">
+      Total number of routers registered to this company (active and inactive).
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="transacciones_recientes" type="array" required>
+  The 5 most recent transactions, ordered by `creada_en` descending.
+  <Expandable title="recent transaction fields">
+    <ResponseField name="id" type="integer">Internal database ID.</ResponseField>
+    <ResponseField name="transaccion_id" type="string">Unique transaction reference string.</ResponseField>
+    <ResponseField name="monto" type="number">Amount as a float.</ResponseField>
+    <ResponseField name="estado" type="string">
+      Payment state. Note: this field is named `estado` (not `estado_pago`) in the dashboard response.
+    </ResponseField>
+    <ResponseField name="fecha" type="string (ISO 8601)">Creation timestamp.</ResponseField>
+  </Expandable>
+</ResponseField>
+
+```json Example Response
+{
+  "empresa": {
+    "nombre": "WiFi Parque Central",
+    "activa": true
+  },
+  "estadisticas": {
+    "total_transacciones": 142,
+    "ingresos_totales": 5740.0,
+    "transacciones_pagadas": 138,
+    "transacciones_pendientes": 4,
+    "total_routers": 3
+  },
+  "transacciones_recientes": [
+    {
+      "id": 142,
+      "transaccion_id": "ord_2xxxxxxxxxxxxxb",
+      "monto": 50.0,
+      "estado": "paid",
+      "fecha": "2025-01-15T14:32:10.123456"
+    },
+    {
+      "id": 141,
+      "transaccion_id": "ord_2xxxxxxxxxxxxxc",
+      "monto": 10.0,
+      "estado": "paid",
+      "fecha": "2025-01-15T13:10:05.654321"
+    },
+    {
+      "id": 140,
+      "transaccion_id": "pref_1234567890",
+      "monto": 50.0,
+      "estado": "pending",
+      "fecha": "2025-01-15T12:00:00.000000"
+    },
+    {
+      "id": 139,
+      "transaccion_id": "ord_2xxxxxxxxxxxxxd",
+      "monto": 10.0,
+      "estado": "paid",
+      "fecha": "2025-01-15T11:45:00.000000"
+    },
+    {
+      "id": 138,
+      "transaccion_id": "ord_2xxxxxxxxxxxxxe",
+      "monto": 50.0,
+      "estado": "paid",
+      "fecha": "2025-01-15T10:20:00.000000"
+    }
+  ]
+}
+```
+
+---
+
+## Payment States
+
+The `estado_pago` field on a transaction can hold the following values:
+
+| Value | Gateway | Meaning |
+|-------|---------|---------|
+| `"pending"` | All | Transaction created, payment not yet confirmed. The customer may still be on the payment page. |
+| `"paid"` | Conekta | Payment confirmed by Conekta webhook. Hotspot user has been created. |
+| `"approved"` | Mercado Pago | Payment approved by Mercado Pago webhook. Hotspot user has been created. |
+| `"rejected"` | Mercado Pago | Payment rejected by Mercado Pago (e.g. insufficient funds, card declined). |
+
+<Note>
+  The `ingresos_totales` field in the dashboard aggregates **all** transaction amounts regardless of state, including `"pending"` and `"rejected"` records. For confirmed revenue, multiply `transacciones_pagadas` by average ticket size, or query the transaction list and filter client-side.
+</Note>

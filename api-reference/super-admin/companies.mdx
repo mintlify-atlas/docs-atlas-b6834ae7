@@ -1,0 +1,251 @@
+---
+title: "Super Admin: Company Management Endpoints"
+sidebarTitle: "Companies"
+description: "Super admin endpoints to create and list companies, and view the global system dashboard with total companies and users."
+---
+
+Companies (empresas) are the top-level tenants of the Pagos Hotspot platform. Each company can have multiple routers, products, and `cliente_admin` users. Only `super_admin` users can create or list companies. Every request in this section must carry a valid session token for a user with the `super_admin` role.
+
+<Note>
+  All endpoints in this section require `Authorization: Bearer <session_token>` for a user with role `super_admin`.
+</Note>
+
+---
+
+## POST /admin/empresas
+
+Creates a new tenant company. The `id` is auto-generated in the format `EMP_` followed by 10 uppercase hex characters.
+
+<Note>
+  Company IDs are generated server-side as `EMP_` + 10 uppercase hex characters (e.g. `EMP_3A9F1C0B2D`). You cannot specify a custom ID.
+</Note>
+
+```bash cURL
+curl -X POST "https://api.example.com/admin/empresas" \
+  -H "Authorization: Bearer <session_token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "nombre": "WiFi Parque Central",
+    "contacto_email": "admin@parquecentral.mx",
+    "contacto_telefono": "+52 55 1234 5678",
+    "conekta_private_key": "key_test_xxxxxxxxxx",
+    "conekta_public_key": "key_pub_test_xxxxxxxxxx",
+    "conekta_mode": "test"
+  }'
+```
+
+### Request Body
+
+<ParamField body="nombre" type="string" required>
+  Company display name shown in the admin panel and captive portal.
+</ParamField>
+
+<ParamField body="contacto_email" type="string" required>
+  Primary contact email for the company. Used for platform notifications.
+</ParamField>
+
+<ParamField body="contacto_telefono" type="string">
+  Optional contact phone number.
+</ParamField>
+
+<ParamField body="conekta_private_key" type="string" default="key_test_default">
+  Conekta secret key (starts with `key_test_` or `key_live_`). Can be updated later by the `cliente_admin` user via `POST /api/v1/admin/mi-empresa/configurar-conekta`.
+</ParamField>
+
+<ParamField body="conekta_public_key" type="string" default="key_test_default_pub">
+  Conekta public key. Can be updated later by the `cliente_admin` user.
+</ParamField>
+
+<ParamField body="conekta_mode" type="string" default="test">
+  Initial Conekta gateway mode. `"test"` or `"live"`.
+</ParamField>
+
+### Response (HTTP 200)
+
+<ResponseField name="id" type="string" required>
+  Auto-generated company identifier. Format: `EMP_` + 10 uppercase hex characters, e.g. `EMP_3A9F1C0B2D`.
+</ResponseField>
+
+<ResponseField name="nombre" type="string" required>
+  Company display name.
+</ResponseField>
+
+<ResponseField name="contacto_email" type="string" required>
+  Primary contact email.
+</ResponseField>
+
+<ResponseField name="contacto_telefono" type="string">
+  Contact phone number, or `null` if not provided.
+</ResponseField>
+
+<ResponseField name="conekta_mode" type="string" required>
+  Conekta mode set at creation: `"test"` or `"live"`.
+</ResponseField>
+
+<ResponseField name="activa" type="boolean" required>
+  Always `true` on creation. Companies are created in active state.
+</ResponseField>
+
+<ResponseField name="creada_en" type="string (ISO 8601)" required>
+  Timestamp of company creation.
+</ResponseField>
+
+```json Example Response
+{
+  "id": "EMP_3A9F1C0B2D",
+  "nombre": "WiFi Parque Central",
+  "contacto_email": "admin@parquecentral.mx",
+  "contacto_telefono": "+52 55 1234 5678",
+  "conekta_mode": "test",
+  "activa": true,
+  "creada_en": "2025-01-15T09:00:00.123456"
+}
+```
+
+---
+
+## GET /admin/empresas
+
+Returns all registered companies in the system. No pagination is applied — all records are returned in a single response.
+
+```bash cURL
+curl -X GET "https://api.example.com/admin/empresas" \
+  -H "Authorization: Bearer <session_token>"
+```
+
+### Response
+
+Returns an array of `EmpresaResponse` objects. See [POST /admin/empresas](#post-adminempresas) for field descriptions.
+
+```json Example Response
+[
+  {
+    "id": "EMP_3A9F1C0B2D",
+    "nombre": "WiFi Parque Central",
+    "contacto_email": "admin@parquecentral.mx",
+    "contacto_telefono": "+52 55 1234 5678",
+    "conekta_mode": "live",
+    "activa": true,
+    "creada_en": "2025-01-10T09:00:00"
+  },
+  {
+    "id": "EMP_7B2E4F1A9C",
+    "nombre": "Internet Café Los Pinos",
+    "contacto_email": "soporte@lospinos.mx",
+    "contacto_telefono": null,
+    "conekta_mode": "test",
+    "activa": true,
+    "creada_en": "2025-01-12T11:30:00"
+  }
+]
+```
+
+---
+
+## GET /admin/dashboard
+
+Returns platform-wide aggregate statistics. Use this for a global operations overview across all tenant companies.
+
+```bash cURL
+curl -X GET "https://api.example.com/admin/dashboard" \
+  -H "Authorization: Bearer <session_token>"
+```
+
+### Response
+
+<ResponseField name="estadisticas" type="object" required>
+  <Expandable title="estadisticas fields">
+    <ResponseField name="total_empresas" type="integer">
+      Total number of companies registered on the platform, both active and inactive.
+    </ResponseField>
+    <ResponseField name="empresas_activas" type="integer">
+      Number of companies with `activa = true`.
+    </ResponseField>
+    <ResponseField name="total_usuarios" type="integer">
+      Total number of user accounts across all companies and all roles (`super_admin` + `cliente_admin`).
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="timestamp" type="string (ISO 8601)" required>
+  UTC timestamp of when the dashboard query was executed.
+</ResponseField>
+
+```json Example Response
+{
+  "estadisticas": {
+    "total_empresas": 15,
+    "empresas_activas": 13,
+    "total_usuarios": 28
+  },
+  "timestamp": "2025-01-15T14:00:00.123456"
+}
+```
+
+---
+
+## GET /admin/empresas/{empresa_id}/stats
+
+Returns detailed operational statistics for a single company: router counts, admin user counts, and active API key counts.
+
+```bash cURL
+curl -X GET "https://api.example.com/admin/empresas/EMP_3A9F1C0B2D/stats" \
+  -H "Authorization: Bearer <session_token>"
+```
+
+### Path Parameters
+
+<ParamField path="empresa_id" type="string" required>
+  Company ID, e.g. `EMP_3A9F1C0B2D`.
+</ParamField>
+
+### Response
+
+<ResponseField name="empresa" type="object" required>
+  <Expandable title="empresa fields">
+    <ResponseField name="id" type="string">Company ID.</ResponseField>
+    <ResponseField name="nombre" type="string">Company display name.</ResponseField>
+    <ResponseField name="activa" type="boolean">Whether the company is currently active.</ResponseField>
+    <ResponseField name="creada_en" type="string (ISO 8601)">Creation timestamp.</ResponseField>
+    <ResponseField name="contacto_email" type="string">Primary contact email.</ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="estadisticas" type="object" required>
+  <Expandable title="estadisticas fields">
+    <ResponseField name="total_routers" type="integer">
+      Total routers registered for this company.
+    </ResponseField>
+    <ResponseField name="routers_activos" type="integer">
+      Number of routers with `activo = true`.
+    </ResponseField>
+    <ResponseField name="routers_inactivos" type="integer">
+      Number of routers with `activo = false`. Computed as `total_routers - routers_activos`.
+    </ResponseField>
+    <ResponseField name="total_usuarios_admin" type="integer">
+      Number of `cliente_admin` users assigned to this company.
+    </ResponseField>
+    <ResponseField name="api_keys_activas" type="integer">
+      Number of non-revoked API keys that have not yet expired, across all routers of this company.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+```json Example Response
+{
+  "empresa": {
+    "id": "EMP_3A9F1C0B2D",
+    "nombre": "WiFi Parque Central",
+    "activa": true,
+    "creada_en": "2025-01-10T09:00:00",
+    "contacto_email": "admin@parquecentral.mx"
+  },
+  "estadisticas": {
+    "total_routers": 3,
+    "routers_activos": 3,
+    "routers_inactivos": 0,
+    "total_usuarios_admin": 2,
+    "api_keys_activas": 3
+  }
+}
+```

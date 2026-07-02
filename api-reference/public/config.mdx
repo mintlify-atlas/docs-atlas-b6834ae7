@@ -1,0 +1,118 @@
+---
+title: "GET /api/v1/config/public — Public Configuration"
+sidebarTitle: "Public Config"
+description: "Returns public configuration for the captive portal, including Conekta and Mercado Pago public keys, and router metadata."
+---
+
+The `/api/v1/config/public` endpoint is the first call a captive portal frontend should make after loading. It returns the public API keys needed to initialize Conekta.js and the Mercado Pago SDK in the browser, along with human-readable metadata about the company and the router serving the portal. All sensitive private keys remain server-side and are never exposed through this endpoint.
+
+## Request
+
+**Method:** `GET`  
+**Path:** `/api/v1/config/public`
+
+### Headers
+
+<ParamField header="X-API-Key" type="string" required>
+  Router API Key in the format `jwt_<token>`. This key identifies both the company and the specific router. Generated when creating a router in the admin panel.
+
+  **Example:** `jwt_eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...`
+</ParamField>
+
+### Request Body
+
+None — this is a `GET` endpoint with no query parameters or body.
+
+---
+
+## Response
+
+Returns a JSON object with two top-level keys: `empresa` (company configuration) and `router` (router metadata).
+
+<ResponseField name="empresa" type="object">
+  Public configuration scoped to the company that owns this router.
+
+  <Expandable title="empresa fields">
+    <ResponseField name="empresa.id" type="integer">
+      Unique internal identifier for the company.
+    </ResponseField>
+
+    <ResponseField name="empresa.nombre" type="string">
+      Display name of the company. Useful for branding the captive portal.
+    </ResponseField>
+
+    <ResponseField name="empresa.conekta_public_key" type="string">
+      Conekta public key (starts with `key_`). Pass this directly to `Conekta.setPublicKey()` in the browser to tokenize card data.
+    </ResponseField>
+
+    <ResponseField name="empresa.mercadopago_public_key" type="string">
+      Mercado Pago public key (starts with `APP_USR-` or `TEST-`). Use this to initialize `MercadoPago(publicKey)` in the frontend SDK.
+    </ResponseField>
+
+    <ResponseField name="empresa.conekta_mode" type="string">
+      Conekta operating mode. Either `"test"` (sandbox) or `"live"` (production). Use this to know whether charges are real.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="router" type="object">
+  Metadata about the specific router that issued the API Key.
+
+  <Expandable title="router fields">
+    <ResponseField name="router.id" type="integer">
+      Unique internal identifier for the router.
+    </ResponseField>
+
+    <ResponseField name="router.nombre" type="string">
+      Human-readable name for the router (e.g., `"Lobby Router"`).
+    </ResponseField>
+
+    <ResponseField name="router.ubicacion" type="string">
+      Physical location description of the router (e.g., `"Piso 2 - Sala de espera"`).
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+---
+
+## Example
+
+### cURL
+
+```bash
+curl -X GET "https://api.example.com/api/v1/config/public" \
+  -H "X-API-Key: jwt_eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb3V0ZXJfaWQiOjEsImVtcHJlc2FfaWQiOjF9.SIG"
+```
+
+### Response `200 OK`
+
+```json
+{
+  "empresa": {
+    "id": 1,
+    "nombre": "Café Internet Centro",
+    "conekta_public_key": "key_ZLyDaKGqDkBbVhKFmHIXsA",
+    "mercadopago_public_key": "TEST-4c1e2f3b-1234-5678-abcd-ef0123456789",
+    "conekta_mode": "test"
+  },
+  "router": {
+    "id": 3,
+    "nombre": "Router Principal",
+    "ubicacion": "Planta Baja - Entrada"
+  }
+}
+```
+
+---
+
+## Error Responses
+
+| Status | Meaning |
+|--------|---------|
+| `401 Unauthorized` | Missing or invalid `X-API-Key` header. |
+| `403 Forbidden` | API Key is revoked or expired. |
+| `500 Internal Server Error` | Server-side error fetching configuration. |
+
+<Note>
+  `conekta_public_key` and `mercadopago_public_key` are safe to expose in the browser. Never use or expose the corresponding private/access token keys on the frontend — those are stored server-side and used internally by the payment endpoints.
+</Note>

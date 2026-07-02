@@ -1,0 +1,332 @@
+---
+title: "Set Up a New Company and Router in Multi-Tenant Mode"
+sidebarTitle: "Multi-Tenant Setup"
+description: "How a super admin provisions a new WiFi operator: create company, add router, generate API Key, create admin user, and configure payment credentials."
+---
+
+The Pagos Hotspot API is built for multi-tenancy: a single deployment serves multiple independent WiFi operators (companies), each with their own MikroTik routers, payment credentials, and product catalogs. A **super admin** — typically the system operator — controls provisioning. This guide walks through the complete onboarding sequence for bringing a new WiFi operator onto the platform.
+
+---
+
+## Roles Overview
+
+| Role | Scope | What They Can Do |
+|---|---|---|
+| `super_admin` | System-wide | Create companies, create routers, generate API Keys, create admin users, view global stats |
+| `cliente_admin` | Single company | Configure payment credentials, manage products, view their own transactions and routers |
+| End user (API Key) | Single router | Fetch catalog, process payments, auto-reconnect |
+
+---
+
+## Full Onboarding Flow
+
+<Steps>
+  <Step title="Log in as super admin">
+    All admin provisioning endpoints require a valid super-admin session JWT in the `Authorization: Bearer` header.
+
+    ```bash
+    curl -X POST https://api.tuempresa.com/api/v1/auth/login \
+      -H "Content-Type: application/json" \
+      -d '{
+        "email": "admin@tuempresa.com",
+        "password": "ClaveAdminFichas123!"
+      }'
+    ```
+
+    **Response:**
+
+    ```json
+    {
+      "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+      "token_type": "bearer"
+    }
+    ```
+
+    Save this token — it is used as `Bearer <token>` in every subsequent admin call.
+  </Step>
+
+  <Step title="Create the company">
+    Register the new WiFi operator as a company. You can set placeholder Conekta keys now; the client will update them later from their own admin panel.
+
+    ```bash
+    curl -X POST https://api.tuempresa.com/admin/empresas \
+      -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..." \
+      -H "Content-Type: application/json" \
+      -d '{
+        "nombre": "WiFi Café Central",
+        "contacto_email": "soporte@cafeccentral.mx",
+        "contacto_telefono": "5512345678",
+        "conekta_private_key": "key_test_default",
+        "conekta_public_key": "key_test_default_pub",
+        "conekta_mode": "test"
+      }'
+    ```
+
+    | Field | Required | Description |
+    |---|---|---|
+    | `nombre` | ✅ | Company display name |
+    | `contacto_email` | ✅ | Primary contact email |
+    | `contacto_telefono` | ❌ | Phone number |
+    | `conekta_private_key` | ✅ | Conekta private key (can be placeholder) |
+    | `conekta_public_key` | ✅ | Conekta public key (can be placeholder) |
+    | `conekta_mode` | ✅ | `"test"` or `"live"` |
+
+    **Response (save the `id`):**
+
+    ```json
+    {
+      "id": "EMP_A1B2C3D4E5",
+      "nombre": "WiFi Café Central",
+      "contacto_email": "soporte@cafeccentral.mx",
+      "conekta_mode": "test",
+      "activa": true,
+      "creada_en": "2024-06-01T10:00:00"
+    }
+    ```
+  </Step>
+
+  <Step title="Add the MikroTik router and generate an API Key">
+    Create the router record for the company's MikroTik device. This single call provisions the router **and** generates a unique API Key JWT. **Save the `api_key` from the response** — it is only shown once and cannot be retrieved again (only regenerated).
+
+    ```bash
+    curl -X POST https://api.tuempresa.com/admin/empresas/EMP_A1B2C3D4E5/routers \
+      -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..." \
+      -H "Content-Type: application/json" \
+      -d '{
+        "empresa_id": "EMP_A1B2C3D4E5",
+        "nombre": "Router Principal - Café Central",
+        "host": "192.168.100.1",
+        "puerto": 8728,
+        "usuario": "admin",
+        "password": "routerpassword",
+        "ubicacion": "Planta baja, junto a caja"
+      }'
+    ```
+
+    | Field | Required | Description |
+    |---|---|---|
+    | `empresa_id` | ✅ | Company ID from Step 2 |
+    | `nombre` | ✅ | Friendly name for the router |
+    | `host` | ✅ | Router IP or hostname reachable from the API server |
+    | `puerto` | ✅ | RouterOS API port (default: `8728`) |
+    | `usuario` | ✅ | MikroTik API username |
+    | `password` | ✅ | MikroTik API password |
+    | `ubicacion` | ❌ | Human-readable physical location |
+
+    **Response:**
+
+    ```json
+    {
+      "id": "RTR_3F7A1B2C",
+      "empresa_id": "EMP_A1B2C3D4E5",
+      "nombre": "Router Principal - Café Central",
+      "host": "192.168.100.1",
+      "puerto": 8728,
+      "ubicacion": "Planta baja, junto a caja",
+      "activo": true,
+      "api_key": "jwt_eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+      "api_key_info": {
+        "key_id": "key_abc123def456",
+        "issued_at": "2024-06-01T10:05:00",
+        "expires_at": "2025-06-01T10:05:00",
+        "type": "router_api_key"
+      },
+      "creado_en": "2024-06-01T10:05:00"
+    }
+    ```
+
+    <Warning>
+      Store `api_key` securely. This is the only time the full token is returned. If the client loses it, a super admin must call `POST /admin/empresas/{id}/routers/{router_id}/regenerate-api-key` to issue a new one — the old key is immediately revoked.
+    </Warning>
+  </Step>
+
+  <Step title="Create the client's admin user">
+    Create a `cliente_admin` account that the WiFi operator will use to log into their management panel, configure payments, and manage products.
+
+    ```bash
+    curl -X POST https://api.tuempresa.com/admin/usuarios \
+      -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..." \
+      -H "Content-Type: application/json" \
+      -d '{
+        "email": "admin@cafeccentral.mx",
+        "password": "ClientePass456!",
+        "nombre": "Carlos Ramírez",
+        "rol": "cliente_admin",
+        "empresa_id": "EMP_A1B2C3D4E5"
+      }'
+    ```
+
+    | Field | Required | Description |
+    |---|---|---|
+    | `email` | ✅ | Login email for the client admin |
+    | `password` | ✅ | Initial password (client should change it) |
+    | `nombre` | ✅ | Full name |
+    | `rol` | ✅ | Must be `"cliente_admin"` for company-scoped access |
+    | `empresa_id` | ✅ | The company this admin belongs to |
+
+    **Response:**
+
+    ```json
+    {
+      "message": "Usuario creado exitosamente",
+      "usuario": {
+        "id": 42,
+        "email": "admin@cafeccentral.mx",
+        "nombre": "Carlos Ramírez",
+        "rol": "cliente_admin",
+        "empresa_id": "EMP_A1B2C3D4E5",
+        "activo": true
+      }
+    }
+    ```
+  </Step>
+
+  <Step title="Deliver credentials to the client">
+    Hand over the following to the new WiFi operator:
+
+    | Item | Value | Notes |
+    |---|---|---|
+    | API Key | `jwt_eyJhbG...` | Use in `X-API-Key` header on all portal calls |
+    | Admin email | `admin@cafeccentral.mx` | For logging into the admin panel |
+    | Admin password | `ClientePass456!` | Temporary — advise client to change it |
+    | API base URL | `https://api.tuempresa.com` | Base URL for all endpoints |
+
+    Advise the client to immediately:
+    1. Log in to the admin panel and change their password.
+    2. Navigate to payment settings and enter their real Conekta or Mercado Pago credentials.
+    3. Create their product catalog to map MikroTik profiles to prices.
+  </Step>
+
+  <Step title="Client configures payment credentials">
+    Once logged in as `cliente_admin`, the client configures their own payment keys — these are stored encrypted and used when processing payments for their company only.
+
+    **Conekta credentials:**
+
+    ```bash
+    curl -X POST https://api.tuempresa.com/api/v1/admin/mi-empresa/configurar-conekta \
+      -H "Authorization: Bearer <cliente_admin_token>" \
+      -H "Content-Type: application/json" \
+      -d '{
+        "private_key": "key_live_xxxxxxxxxxxxxxxx",
+        "public_key": "key_live_pub_xxxxxxxxxxxxxxxx",
+        "mode": "live"
+      }'
+    ```
+
+    **Mercado Pago credentials:**
+
+    ```bash
+    curl -X POST https://api.tuempresa.com/api/v1/payments/configurar-credenciales \
+      -H "Authorization: Bearer <cliente_admin_token>" \
+      -H "Content-Type: application/json" \
+      -d '{
+        "access_token": "APP_USR-xxxxxxxxxxxxxxxx",
+        "public_key": "APP_USR-pub-xxxxxxxxxxxxxxxx",
+        "webhook_secret": "whsec_xxxxxxxxxxxxxxxx",
+        "mode": "live"
+      }'
+    ```
+  </Step>
+
+  <Step title="Client creates the product catalog">
+    The client maps MikroTik profiles to prices and display names. Each product is scoped to a specific router.
+
+    ```bash
+    curl -X POST https://api.tuempresa.com/api/v1/admin/products \
+      -H "Authorization: Bearer <cliente_admin_token>" \
+      -H "Content-Type: application/json" \
+      -d '{
+        "perfil_mikrotik_id": "mikrotik-profile-uuid",
+        "perfil_mikrotik_nombre": "1hora",
+        "nombre_venta": "1 Hora de Internet",
+        "descripcion": "Acceso ilimitado por 1 hora",
+        "precio": 15.00,
+        "moneda": "MXN",
+        "router_id": "RTR_3F7A1B2C",
+        "detalles": [
+          { "label": "Velocidad", "value": "10 Mbps" },
+          { "label": "Duración", "value": "1 hora" }
+        ],
+        "destacado": false
+      }'
+    ```
+  </Step>
+
+  <Step title="Verify connectivity">
+    Test the router connection from the API to confirm the MikroTik credentials are correct and the API server can reach the device.
+
+    ```bash
+    curl -X GET "https://api.tuempresa.com/api/v1/admin/routers/RTR_3F7A1B2C/test-connection" \
+      -H "Authorization: Bearer <cliente_admin_token>"
+    ```
+
+    Then verify MikroTik profiles are accessible:
+
+    ```bash
+    curl -X GET "https://api.tuempresa.com/api/v1/admin/routers/RTR_3F7A1B2C/mikrotik-profiles" \
+      -H "Authorization: Bearer <cliente_admin_token>"
+    ```
+
+    A successful response confirms end-to-end connectivity from the API server to the MikroTik router. The client is now fully operational.
+  </Step>
+</Steps>
+
+---
+
+## Responsibility Matrix
+
+| Task | Who Does It | Endpoint |
+|---|---|---|
+| Create company | Super admin | `POST /admin/empresas` |
+| Create router + API Key | Super admin | `POST /admin/empresas/{id}/routers` |
+| Create admin user | Super admin | `POST /admin/usuarios` |
+| Regenerate lost API Key | Super admin | `POST /admin/empresas/{id}/routers/{id}/regenerate-api-key` |
+| Configure Conekta keys | Client admin | `POST /api/v1/admin/mi-empresa/configurar-conekta` |
+| Configure Mercado Pago keys | Client admin | `POST /api/v1/payments/configurar-credenciales` |
+| Create products | Client admin | `POST /api/v1/admin/products` |
+| Process payments | End user (portal) | `POST /api/v1/payments/pagar-conekta` |
+| Fetch catalog | End user (portal) | `GET /api/v1/catalogo_perfiles_venta` |
+
+---
+
+## API Key Management
+
+API Keys are JWT tokens scoped to a single router, valid for 1 year by default. A super admin can manage them through these endpoints:
+
+<CardGroup cols={2}>
+  <Card title="Check key status" icon="circle-info">
+    `GET /admin/empresas/{id}/routers/{router_id}/api-key-status`
+
+    Returns expiry date, last-used timestamp, usage count, and warnings if the key is expiring within 30 days.
+  </Card>
+  <Card title="Regenerate a key" icon="rotate">
+    `POST /admin/empresas/{id}/routers/{router_id}/regenerate-api-key`
+
+    Revokes the current key and issues a new one. Use when a client loses their key.
+  </Card>
+  <Card title="View all keys" icon="clock-rotate-left">
+    `GET /admin/empresas/{id}/routers/{router_id}/api-keys`
+
+    Lists all keys (active and historical) for audit purposes.
+  </Card>
+  <Card title="Revoke a specific key" icon="ban">
+    `POST /admin/empresas/{id}/routers/{router_id}/api-keys/{key_id}/revoke`
+
+    Immediately invalidates a specific key without issuing a replacement. Use when a key is suspected of being compromised.
+  </Card>
+</CardGroup>
+
+---
+
+## Environment Variables Checklist
+
+Before onboarding any company, confirm the following variables are set on the API server:
+
+```bash
+DATABASE_URL=postgresql://user:pass@localhost/venta_fichas_db
+JWT_APIKEY_SECRET=<strong_random_secret>
+JWT_SESSION_SECRET=<strong_random_secret>
+SUPER_ADMIN_INITIAL_EMAIL=admin@tuempresa.com
+SUPER_ADMIN_INITIAL_PASSWORD=<strong_password>
+BACKEND_CORS_ORIGINS=["https://portal.tuempresa.com"]
+```

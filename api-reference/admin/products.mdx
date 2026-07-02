@@ -1,0 +1,376 @@
+---
+title: "Product Management — Create and Manage Hotspot Plans"
+sidebarTitle: "Products"
+description: "CRUD endpoints for managing Hotspot products (plans) that map MikroTik profiles to prices and display names shown in the captive portal."
+---
+
+Products are the catalog items that end-users see on the WiFi captive portal. Each product ties a specific **MikroTik Hotspot profile** (which controls bandwidth, session duration, and other network parameters) to a **display name**, **price**, and additional marketing fields such as description, image, and feature bullet points. A product always belongs to one router within the authenticated company.
+
+All endpoints require `Authorization: Bearer <session_token>` for a `cliente_admin` user.
+
+<Note>
+  Each router can only have **one product per MikroTik profile ID**. Attempting to create a duplicate `perfil_mikrotik_id` on the same router returns HTTP 409 Conflict.
+</Note>
+
+---
+
+## POST /api/v1/admin/products
+
+Creates a new product. The router referenced by `router_id` must belong to the authenticated user's company. Returns the created product with HTTP 201.
+
+```bash cURL
+curl -X POST "https://api.example.com/api/v1/admin/products" \
+  -H "Authorization: Bearer <session_token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "router_id": "RTR_A1B2C3D4",
+    "perfil_mikrotik_id": "*003",
+    "perfil_mikrotik_nombre": "1_Semana_tiempo_corrido",
+    "nombre_venta": "Plan Semanal",
+    "descripcion": "Acceso ilimitado por 7 días corridos",
+    "precio": 50.00,
+    "moneda": "MXN",
+    "detalles": [
+      { "texto": "7 días continuos" },
+      { "texto": "Velocidad 10 Mbps" },
+      { "texto": "Sin límite de datos" }
+    ],
+    "activo": true,
+    "orden_visual": 1,
+    "destacado": true
+  }'
+```
+
+### Request Body
+
+<ParamField body="router_id" type="string" required>
+  ID of the router this product belongs to. Must be a router owned by the authenticated company.
+</ParamField>
+
+<ParamField body="perfil_mikrotik_id" type="string" required>
+  The MikroTik internal profile identifier, e.g. `"*003"`. Use [GET /mikrotik-profiles](/api-reference/admin/mikrotik-profiles) to retrieve available profile IDs from the router in real time.
+</ParamField>
+
+<ParamField body="perfil_mikrotik_nombre" type="string" required>
+  The technical name of the MikroTik profile, e.g. `"1_Semana_tiempo_corrido"`. This is stored for display purposes and used when creating hotspot users.
+</ParamField>
+
+<ParamField body="nombre_venta" type="string" required>
+  Customer-facing product name shown on the captive portal, e.g. `"Plan Semanal"`.
+</ParamField>
+
+<ParamField body="descripcion" type="string">
+  Optional short description displayed below the product name on the captive portal.
+</ParamField>
+
+<ParamField body="imagen_url" type="string">
+  Optional URL to a product thumbnail or promotional image.
+</ParamField>
+
+<ParamField body="precio" type="number" required>
+  Product price as a decimal number, e.g. `50.00`.
+</ParamField>
+
+<ParamField body="moneda" type="string" default="MXN">
+  Currency code. Accepted values: `"MXN"`, `"USD"`, `"EUR"`.
+</ParamField>
+
+<ParamField body="detalles" type="array">
+  Array of feature bullet-point objects. Each object must have a `"texto"` key with the display string. Stored internally as JSON and returned as a flat array of strings.
+
+  ```json
+  [
+    { "texto": "7 días continuos" },
+    { "texto": "Velocidad 10 Mbps" }
+  ]
+  ```
+</ParamField>
+
+<ParamField body="activo" type="boolean" default="true">
+  Whether the product is visible on the captive portal. Defaults to `true`.
+</ParamField>
+
+<ParamField body="orden_visual" type="integer" default="0">
+  Sort order for display on the captive portal. Lower values appear first.
+</ParamField>
+
+<ParamField body="destacado" type="boolean" default="false">
+  When `true`, the product is highlighted as a featured/recommended plan on the captive portal.
+</ParamField>
+
+### Response (HTTP 201)
+
+Returns a `ProductoResponse` object. See the [ProductoResponse fields](#productoresponse-fields) reference below.
+
+```json
+{
+  "id": 12,
+  "router_id": "RTR_A1B2C3D4",
+  "perfil_mikrotik_id": "*003",
+  "perfil_mikrotik_nombre": "1_Semana_tiempo_corrido",
+  "nombre_venta": "Plan Semanal",
+  "descripcion": "Acceso ilimitado por 7 días corridos",
+  "imagen_url": null,
+  "precio": 50.0,
+  "moneda": "MXN",
+  "detalles": ["7 días continuos", "Velocidad 10 Mbps", "Sin límite de datos"],
+  "activo": true,
+  "orden_visual": 1,
+  "destacado": true,
+  "creado_en": "2025-01-15T10:00:00"
+}
+```
+
+### Error Responses
+
+| Status | Detail |
+|--------|--------|
+| `404`  | Router not found or does not belong to this company |
+| `409`  | A product with this `perfil_mikrotik_id` already exists for this router |
+
+---
+
+## GET /api/v1/admin/products
+
+Lists all products for the authenticated company, ordered by `orden_visual` ascending, then `creado_en` descending. Optionally filter by router.
+
+```bash cURL
+# All products
+curl -X GET "https://api.example.com/api/v1/admin/products" \
+  -H "Authorization: Bearer <session_token>"
+
+# Products for a specific router
+curl -X GET "https://api.example.com/api/v1/admin/products?router_id=RTR_A1B2C3D4" \
+  -H "Authorization: Bearer <session_token>"
+```
+
+### Query Parameters
+
+<ParamField query="router_id" type="string">
+  Filter results to a single router. The router must belong to the authenticated company.
+</ParamField>
+
+### Response
+
+Returns an array of `ProductoResponse` objects.
+
+```json
+[
+  {
+    "id": 12,
+    "router_id": "RTR_A1B2C3D4",
+    "perfil_mikrotik_id": "*003",
+    "perfil_mikrotik_nombre": "1_Semana_tiempo_corrido",
+    "nombre_venta": "Plan Semanal",
+    "descripcion": "Acceso ilimitado por 7 días corridos",
+    "imagen_url": null,
+    "precio": 50.0,
+    "moneda": "MXN",
+    "detalles": ["7 días continuos", "Velocidad 10 Mbps"],
+    "activo": true,
+    "orden_visual": 1,
+    "destacado": true,
+    "creado_en": "2025-01-15T10:00:00"
+  },
+  {
+    "id": 11,
+    "router_id": "RTR_A1B2C3D4",
+    "perfil_mikrotik_id": "*002",
+    "perfil_mikrotik_nombre": "1_Dia",
+    "nombre_venta": "Plan Diario",
+    "descripcion": "Acceso por 24 horas",
+    "imagen_url": null,
+    "precio": 10.0,
+    "moneda": "MXN",
+    "detalles": ["24 horas continuas"],
+    "activo": true,
+    "orden_visual": 0,
+    "destacado": false,
+    "creado_en": "2025-01-14T09:00:00"
+  }
+]
+```
+
+---
+
+## GET /api/v1/admin/products/{producto_id}
+
+Returns a single product by its numeric ID. Returns HTTP 404 if the product does not exist or belongs to a different company.
+
+```bash cURL
+curl -X GET "https://api.example.com/api/v1/admin/products/12" \
+  -H "Authorization: Bearer <session_token>"
+```
+
+### Path Parameters
+
+<ParamField path="producto_id" type="integer" required>
+  Numeric product ID returned when the product was created.
+</ParamField>
+
+### Response
+
+Returns a single `ProductoResponse` object.
+
+---
+
+## PUT /api/v1/admin/products/{producto_id}
+
+Partially updates a product. Only fields included in the request body are modified. `router_id`, `perfil_mikrotik_id`, and `perfil_mikrotik_nombre` cannot be changed after creation — create a new product instead.
+
+```bash cURL
+curl -X PUT "https://api.example.com/api/v1/admin/products/12" \
+  -H "Authorization: Bearer <session_token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "nombre_venta": "Plan Semanal Premium",
+    "precio": 65.00,
+    "destacado": true,
+    "detalles": [
+      { "texto": "7 días continuos" },
+      { "texto": "Velocidad 20 Mbps" },
+      { "texto": "Sin límite de datos" }
+    ]
+  }'
+```
+
+### Path Parameters
+
+<ParamField path="producto_id" type="integer" required>
+  Numeric ID of the product to update.
+</ParamField>
+
+### Request Body
+
+<ParamField body="nombre_venta" type="string">
+  New customer-facing product name.
+</ParamField>
+
+<ParamField body="descripcion" type="string">
+  New description text.
+</ParamField>
+
+<ParamField body="imagen_url" type="string">
+  New image URL.
+</ParamField>
+
+<ParamField body="precio" type="number">
+  New price.
+</ParamField>
+
+<ParamField body="moneda" type="string">
+  Currency code: `"MXN"`, `"USD"`, or `"EUR"`. Returns HTTP 422 if any other value is provided.
+</ParamField>
+
+<ParamField body="detalles" type="array">
+  Replaces the entire `detalles` array. Same format as the create endpoint.
+</ParamField>
+
+<ParamField body="activo" type="boolean">
+  Show or hide the product on the captive portal.
+</ParamField>
+
+<ParamField body="orden_visual" type="integer">
+  New display sort order.
+</ParamField>
+
+<ParamField body="destacado" type="boolean">
+  Toggle featured/highlighted status.
+</ParamField>
+
+### Response
+
+Returns the updated `ProductoResponse` object.
+
+---
+
+## DELETE /api/v1/admin/products/{producto_id}
+
+Soft-deletes a product by setting `activo = false`. The product record is retained in the database for historical transaction data integrity. It will no longer appear on the captive portal.
+
+```bash cURL
+curl -X DELETE "https://api.example.com/api/v1/admin/products/12" \
+  -H "Authorization: Bearer <session_token>"
+```
+
+### Path Parameters
+
+<ParamField path="producto_id" type="integer" required>
+  Numeric ID of the product to deactivate.
+</ParamField>
+
+### Response
+
+```json
+{
+  "message": "Producto desactivado",
+  "producto_id": 12,
+  "activo": false
+}
+```
+
+<Tip>
+  To re-activate a deactivated product, use `PUT /api/v1/admin/products/{producto_id}` with `{ "activo": true }`.
+</Tip>
+
+---
+
+## ProductoResponse Fields
+
+All product endpoints return `ProductoResponse` objects with the following fields:
+
+<ResponseField name="id" type="integer" required>
+  Auto-incremented numeric product ID.
+</ResponseField>
+
+<ResponseField name="router_id" type="string" required>
+  ID of the router this product is associated with.
+</ResponseField>
+
+<ResponseField name="perfil_mikrotik_id" type="string" required>
+  MikroTik internal profile ID, e.g. `"*003"`.
+</ResponseField>
+
+<ResponseField name="perfil_mikrotik_nombre" type="string" required>
+  MikroTik profile technical name, e.g. `"1_Semana_tiempo_corrido"`.
+</ResponseField>
+
+<ResponseField name="nombre_venta" type="string" required>
+  Customer-facing product name shown on the captive portal.
+</ResponseField>
+
+<ResponseField name="descripcion" type="string">
+  Optional description text.
+</ResponseField>
+
+<ResponseField name="imagen_url" type="string">
+  Optional URL to a product image.
+</ResponseField>
+
+<ResponseField name="precio" type="number" required>
+  Product price as a float.
+</ResponseField>
+
+<ResponseField name="moneda" type="string" required>
+  Currency code: `"MXN"`, `"USD"`, or `"EUR"`.
+</ResponseField>
+
+<ResponseField name="detalles" type="array of strings">
+  Feature bullet points. Stored as JSON objects internally but serialized as a flat array of strings: `["7 días continuos", "Velocidad 10 Mbps"]`.
+</ResponseField>
+
+<ResponseField name="activo" type="boolean" required>
+  Whether the product is currently active and visible on the captive portal.
+</ResponseField>
+
+<ResponseField name="orden_visual" type="integer" required>
+  Display sort order. Lower values appear first.
+</ResponseField>
+
+<ResponseField name="destacado" type="boolean" required>
+  Whether this product is highlighted as a featured plan.
+</ResponseField>
+
+<ResponseField name="creado_en" type="string (ISO 8601)" required>
+  Timestamp of when the product was created.
+</ResponseField>

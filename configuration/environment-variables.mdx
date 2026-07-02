@@ -1,0 +1,194 @@
+---
+title: "Environment Variables Reference for Pagos Hotspot API"
+sidebarTitle: "Environment Variables"
+description: "Complete reference for all .env variables required by Pagos Hotspot API, including database, JWT secrets, payment gateway keys, and CORS settings."
+---
+
+The Pagos Hotspot API is configured entirely through environment variables, following the [twelve-factor app](https://12factor.net/config) methodology. All variables are loaded via `pydantic-settings` from a `.env` file at the project root. Variables marked **required** have no default value and will cause the application to refuse to start if missing.
+
+<Warning>
+  Never commit your `.env` file or any file containing secrets to version
+  control. Add `.env` to your `.gitignore` immediately. Rotate any key that has
+  been accidentally exposed.
+</Warning>
+
+---
+
+## Database
+
+<ParamField body="DATABASE_URL" type="string" required>
+  PostgreSQL connection string in SQLAlchemy format. The async `asyncpg` driver
+  is expected.
+
+  **Example:** `postgresql+asyncpg://user:password@localhost:5432/pagos_hotspot`
+</ParamField>
+
+<ParamField body="DATABASE_POOL_SIZE" type="integer" default="20">
+  Number of persistent connections SQLAlchemy keeps in its connection pool.
+  Increase this value for high-traffic deployments.
+</ParamField>
+
+---
+
+## JWT & Authentication
+
+<ParamField body="JWT_APIKEY_SECRET" type="string" required>
+  Secret used to sign router API Key JWTs (the tokens prefixed with `jwt_`
+  that captive portals send in the `X-API-Key` header). Must be a long,
+  random, unguessable string — a minimum of 32 bytes of entropy is recommended.
+</ParamField>
+
+<ParamField body="JWT_SESSION_SECRET" type="string" required>
+  Secret used to sign admin session JWTs returned by the login endpoint.
+  Must be different from `JWT_APIKEY_SECRET`.
+</ParamField>
+
+<ParamField body="JWT_ALGORITHM" type="string" default="HS256">
+  JWT signing algorithm. The default `HS256` (HMAC-SHA256) is appropriate for
+  most deployments. Do not change this unless you fully understand the
+  security implications.
+</ParamField>
+
+<ParamField body="JWT_APIKEY_EXPIRE_DAYS" type="integer" default="365">
+  Number of days before a generated router API Key expires. Set to a lower
+  value in security-sensitive environments.
+</ParamField>
+
+<ParamField body="JWT_SESSION_EXPIRE_HOURS" type="integer" default="24">
+  Number of hours before an admin session token expires. Users are required
+  to log in again after this period.
+</ParamField>
+
+---
+
+## General Security
+
+<ParamField body="SECRET_KEY" type="string" required>
+  General-purpose application secret key used for miscellaneous cryptographic
+  operations. Generate with `openssl rand -hex 32` or equivalent.
+</ParamField>
+
+<ParamField body="BCRYPT_ROUNDS" type="integer" default="12">
+  Cost factor passed to `bcrypt` when hashing admin passwords. Higher values
+  increase security at the cost of slower login responses. Valid range is
+  typically 10–14 for production servers.
+</ParamField>
+
+---
+
+## CORS
+
+<ParamField body="BACKEND_CORS_ORIGINS" type="string" default="[]">
+  Comma-separated list of allowed CORS origins. Accepts a plain string (parsed
+  at startup) or a JSON array. Leave empty to disallow all cross-origin
+  requests.
+
+  **Example:** `https://portal.example.com,https://admin.example.com`
+</ParamField>
+
+---
+
+## Super Admin Bootstrap
+
+<ParamField body="SUPER_ADMIN_INITIAL_EMAIL" type="string" required>
+  Email address used to create the initial super-admin account on first
+  startup. This account has global access across all tenant companies.
+</ParamField>
+
+<ParamField body="SUPER_ADMIN_INITIAL_PASSWORD" type="string" required>
+  Password for the initial super-admin account. Change this immediately after
+  the first login. The value is stored as a bcrypt hash — the plaintext is
+  never persisted.
+</ParamField>
+
+---
+
+## Conekta (Optional)
+
+<ParamField body="CONEKTA_DEFAULT_PRIVATE_KEY" type="string">
+  System-level fallback private key for Conekta. In a fully multi-tenant
+  deployment each company stores its own key in the database; this variable
+  acts as a default when a company has not yet configured its own Conekta
+  credentials. Can be left empty.
+</ParamField>
+
+<ParamField body="CONEKTA_DEFAULT_PUBLIC_KEY" type="string">
+  System-level fallback public key for Conekta. Same behaviour as
+  `CONEKTA_DEFAULT_PRIVATE_KEY`. Can be left empty.
+</ParamField>
+
+---
+
+## Mercado Pago Encryption
+
+<ParamField body="ENCRYPTION_KEY_MERCADO_PAGO" type="string">
+  A URL-safe base64-encoded 32-byte [Fernet](https://cryptography.io/en/latest/fernet/)
+  key used to encrypt Mercado Pago `access_token` and `webhook_secret` values
+  before they are stored in the database. Generate one with:
+
+  ```python
+  from cryptography.fernet import Fernet
+  print(Fernet.generate_key().decode())
+  ```
+
+  If this variable is left empty, tokens are stored without encryption. Setting
+  it is **strongly recommended** for any production environment.
+</ParamField>
+
+---
+
+## Application
+
+<ParamField body="APP_NAME" type="string" default="MikroTik Payment API">
+  Display name shown in the OpenAPI (Swagger) documentation UI at `/docs`.
+</ParamField>
+
+<ParamField body="DEBUG" type="boolean" default="false">
+  Enables verbose debug output and FastAPI's debug mode. **Never enable this
+  in production** — it can expose internal stack traces to clients.
+</ParamField>
+
+---
+
+## Complete `.env` Example
+
+```ini .env
+# ── Database ─────────────────────────────────────────────
+DATABASE_URL=postgresql+asyncpg://pagos:strongpassword@localhost:5432/pagos_hotspot
+DATABASE_POOL_SIZE=20
+
+# ── JWT ──────────────────────────────────────────────────
+JWT_APIKEY_SECRET=change_me_a_very_long_random_string_for_api_keys
+JWT_SESSION_SECRET=change_me_another_long_random_string_for_sessions
+JWT_ALGORITHM=HS256
+JWT_APIKEY_EXPIRE_DAYS=365
+JWT_SESSION_EXPIRE_HOURS=24
+
+# ── Security ─────────────────────────────────────────────
+SECRET_KEY=change_me_general_secret_key_32_bytes_minimum
+BCRYPT_ROUNDS=12
+
+# ── CORS ─────────────────────────────────────────────────
+BACKEND_CORS_ORIGINS=https://portal.example.com,https://admin.example.com
+
+# ── Super Admin Bootstrap ────────────────────────────────
+SUPER_ADMIN_INITIAL_EMAIL=admin@example.com
+SUPER_ADMIN_INITIAL_PASSWORD=change_me_super_secret
+
+# ── Conekta (optional system-level fallback) ─────────────
+CONEKTA_DEFAULT_PRIVATE_KEY=
+CONEKTA_DEFAULT_PUBLIC_KEY=
+
+# ── Mercado Pago encryption ──────────────────────────────
+ENCRYPTION_KEY_MERCADO_PAGO=
+
+# ── App ──────────────────────────────────────────────────
+APP_NAME=MikroTik Payment API
+DEBUG=false
+```
+
+<Note>
+  Generate strong secrets with `openssl rand -hex 32` (for `SECRET_KEY`,
+  `JWT_APIKEY_SECRET`, `JWT_SESSION_SECRET`) and
+  `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"` for `ENCRYPTION_KEY_MERCADO_PAGO`.
+</Note>

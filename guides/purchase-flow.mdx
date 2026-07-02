@@ -1,0 +1,338 @@
+---
+title: "End-to-End Hotspot Purchase Flow"
+sidebarTitle: "Purchase Flow"
+description: "Walk through the complete payment lifecycle: catalog fetch, card tokenization, payment processing, MikroTik user creation, and automatic rollback on failure."
+---
+
+When a customer connects to a MikroTik captive portal and wants to buy internet access, the Pagos Hotspot API orchestrates a precise sequence of events: it creates the MikroTik user **before** charging the card, then validates the payment status with a double check, and automatically rolls back the router user if anything fails. This document walks through every step of that lifecycle for both Conekta and Mercado Pago.
+
+---
+
+## Step 1 — Fetch the Product Catalog
+
+Before presenting any payment UI, the captive portal retrieves the list of available plans. The API Key in the header identifies which company and router to scope the catalog to.
+
+```http
+GET /api/v1/catalogo_perfiles_venta
+X-API-Key: jwt_eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+```
+
+**Sample response:**
+
+```json
+[
+  {
+    "id": 3,
+    "perfil_mikrotik_id": "mikrotik-profile-uuid",
+    "perfil_mikrotik_nombre": "1hora",
+    "nombre_venta": "1 Hora de Internet",
+    "descripcion": "Acceso ilimitado por 1 hora",
+    "imagen_url": null,
+    "precio": 15.00,
+    "moneda": "MXN",
+    "detalles": [
+      { "label": "Velocidad", "value": "10 Mbps" },
+      { "label": "Duración", "value": "1 hora" }
+    ],
+    "destacado": false,
+    "creado_en": "2024-01-15T10:00:00"
+  }
+]
+```
+
+<Note>
+  The catalog is scoped automatically by the API Key. A key issued for Router A will never expose products from Router B, even within the same company.
+</Note>
+
+---
+
+## Step 2 — Tokenize the Card (Conekta.js)
+
+Card data **never travels through your server**. The captive portal frontend uses [Conekta.js](https://developers.conekta.com/docs/conekta-js) directly in the browser to convert raw card details into a single-use token.
+
+```html
+<script src="https://cdn.conekta.io/js/latest/conekta.js"></script>
+<script>
+  Conekta.setPublicKey("pk_test_xxxxxxxxxxxxxxxx"); // from GET /config/public
+
+  Conekta.Token.create(
+    {
+      card: {
+        number: "4242424242424242",
+        name: "Cliente Ejemplo",
+        exp_year: "25",
+        exp_month: "12",
+        cvc: "123"
+      }
+    },
+    function (token) {
+      // token.id is what you send to POST /payments/pagar-conekta
+      processPayment(token.id);
+    },
+    function (err) {
+      console.error(err);
+    }
+  );
+</script>
+```
+
+<Note>
+  Retrieve the `conekta_public_key` from `GET /api/v1/config/public` at page load. Never hardcode it.
+</Note>
+
+---
+
+## Step 3 — Submit the Conekta Payment Request
+
+With a tokenized card and a selected `product_id`, the portal POSTs to the payment endpoint.
+
+```http
+POST /api/v1/payments/pagar-conekta
+X-API-Key: jwt_eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+Content-Type: application/json
+```
+
+**Request body:**
+
+```json
+{
+  "product_id": 3,
+  "card_token": "tok_test_xxxxxxxxxxxxxxxxx",
+  "customer_name": "Ana López",
+  "customer_email": "ana@example.com",
+  "customer_phone": "5512345678",
+  "user_type": "usuario_contrasena",
+  "mac_address": "AA:BB:CC:DD:EE:FF",
+  "ip_address": "192.168.88.100",
+  "auto_connect": true
+}
+```
+
+| Field | Required | Description |
+|---|---|---|
+| `product_id` | ✅ | ID from the catalog |
+| `card_token` | ✅ | Token from Conekta.js |
+| `customer_name` | ✅ | Customer full name |
+| `customer_email` | ✅ | Valid email address |
+| `user_type` | ❌ | `"usuario_contrasena"` (default) or `"pin"` |
+| `mac_address` | ❌ | Device MAC for auto-connect |
+| `ip_address` | ❌ | Device IP for auto-connect |
+| `auto_connect` | ❌ | `true` to attempt auto-login (default: `false`) |
+
+---
+
+## The Server-Side Flow
+
+Once the request arrives, the server executes the following steps in strict order:
+
+<Steps>
+  <Step title="Validate product and company ownership">
+    The API Key is decoded to extract the `empresa_id` and `router_id`. The server verifies that `product_id` exists **and** belongs to the empresa resolved from the key. A mismatch returns `HTTP 404`.
+
+    ```python
+    if not producto or producto.empresa_id != empresa.id:
+        raise HTTPException(status_code=404, detail="Producto no encontrado")
+    ```
+  </Step>
+
+  <Step title="Normalize user type">
+    The `user_type` field is normalized to exactly `"usuario_contrasena"` or `"pin"`. Any invalid or missing value defaults to `"usuario_contrasena"`.
+
+    - **`usuario_contrasena`** → generates a username like `AB3C9D` plus a fixed password `1234`
+    - **`pin`** → generates a 6-digit numeric PIN as the password; username field is still populated but the PIN is the primary credential shown to the user
+  </Step>
+
+  <Step title="Generate MikroTik credentials">
+    `mikrotik_service.generate_credentials(user_type=user_type)` produces a `credentials` dict with `username` and `password` keys. These are used in all subsequent steps.
+  </Step>
+
+  <Step title="Create MikroTik user (critical — happens BEFORE payment)">
+    The user is registered on the MikroTik router immediately, before any payment is attempted.
+
+    ```python
+    await mikrotik_service.create_hotspot_user(
+        router_host=router.host,
+        router_port=router.puerto,
+        router_user=router.usuario,
+        router_password=router.password_encrypted,
+        username=credentials["username"],
+        password=credentials["password"],
+        profile_name=producto.perfil_mikrotik_nombre,
+        user_type=user_type
+    )
+    ```
+
+    <Warning>
+      If MikroTik user creation fails, **no payment is attempted**. The endpoint returns `HTTP 500` with a message like _"No se pudo crear el acceso a internet"_. This design guarantees that a user is never charged for an access slot that could not be provisioned.
+    </Warning>
+  </Step>
+
+  <Step title="Charge the card via Conekta">
+    With a successfully created MikroTik user, the server calls the Conekta API to charge the tokenized card for the product price. The company's `conekta_private_key` (stored server-side and never exposed) is used for the request.
+  </Step>
+
+  <Step title="Double-validate payment status">
+    The Conekta response is inspected for `payment_status`. Only `"paid"` is considered successful. All other statuses — including `"pending"`, `"declined"`, `"expired"`, `"failed"` — trigger an `HTTP 402` and an immediate MikroTik rollback.
+
+    ```python
+    if status == "paid":
+        return True, ""
+    # All other statuses map to a specific error message
+    ```
+  </Step>
+
+  <Step title="Rollback on payment failure">
+    If payment validation fails, `rollback_usuario()` deletes the MikroTik user that was created in Step 4, and the database transaction is rolled back. No credentials are issued.
+
+    ```python
+    await rollback_usuario(router, credentials["username"], user_type)
+    await db.rollback()
+    raise HTTPException(status_code=402, detail=mensaje_error)
+    ```
+  </Step>
+
+  <Step title="Save transaction to database">
+    On success, a `Transaccion` record is committed to PostgreSQL containing the Conekta order ID, empresa/router IDs, product, amount, customer info, and the generated credentials.
+  </Step>
+
+  <Step title="Execute auto-connection (optional)">
+    If `auto_connect=true` and `mac_address` was provided, `ejecutar_auto_conexion()` is called to inject a MAC cookie and log the device into the hotspot automatically. The result is included in the response as `auto_conexion`.
+  </Step>
+
+  <Step title="Return credentials to client">
+    The full response is returned, including the hotspot username/password, product info, and auto-connection status.
+  </Step>
+</Steps>
+
+---
+
+## Conekta Payment — Successful Response
+
+```json
+{
+  "success": true,
+  "id_transaccion": "ord_2xBqK7jDt6uXoYzA",
+  "estado_pago": "paid",
+  "tipo_usuario": "usuario_contrasena",
+  "usuario_hotspot": {
+    "usuario": "AB3C9D",
+    "contrasena": "1234"
+  },
+  "producto": {
+    "nombre": "1 Hora de Internet",
+    "precio": 15.00,
+    "moneda": "MXN",
+    "perfil_mikrotik": "1hora"
+  },
+  "cliente": {
+    "nombre": "Ana López",
+    "email": "ana@example.com"
+  },
+  "timestamp": "2024-06-01T14:22:10.000000",
+  "auto_conexion": {
+    "estado": "conectado",
+    "mac": "AA:BB:CC:DD:EE:FF",
+    "ip": "192.168.88.100",
+    "mensaje": "¡Conexión establecida con éxito! Disfrute de Internet sin límites",
+    "verificado": true,
+    "session_id": "active-session-id"
+  }
+}
+```
+
+---
+
+## Mercado Pago Payment Flow
+
+The Mercado Pago flow — `POST /api/v1/payments/pagar-mercado-pago` — is nearly identical to the Conekta flow with two important differences:
+
+1. **Amount validation**: The server checks that `transaction_amount` in the request matches the product price within a tolerance of `0.01`. A mismatch returns `HTTP 400` immediately, before any MikroTik user is created.
+
+   ```python
+   if abs(payment_data.transaction_amount - float(producto.precio)) > 0.01:
+       raise HTTPException(status_code=400, detail="El monto no coincide con el producto")
+   ```
+
+2. **Status mapping**: Mercado Pago uses `"approved"` (not `"paid"`) as the success state. The status `"pending"` is also accepted with a warning in the response.
+
+**Mercado Pago request body:**
+
+```json
+{
+  "product_id": 3,
+  "token": "mp_token_from_sdk",
+  "issuer_id": "123",
+  "payment_method_id": "visa",
+  "transaction_amount": 15.00,
+  "installments": 1,
+  "customer_name": "Ana López",
+  "customer_email": "ana@example.com",
+  "customer_phone": "5512345678",
+  "device_id": "device-fingerprint-from-mp-sdk",
+  "payer": { "email": "ana@example.com" },
+  "user_type": "usuario_contrasena",
+  "mac_address": "AA:BB:CC:DD:EE:FF",
+  "ip_address": "192.168.88.100",
+  "auto_connect": true
+}
+```
+
+**Mercado Pago successful response (extra fields):**
+
+```json
+{
+  "success": true,
+  "id_transaccion": "1234567890",
+  "estado_pago": "approved",
+  "tipo_usuario": "pin",
+  "usuario_hotspot": {
+    "usuario": "AB3C9D",
+    "contrasena": "482931"
+  },
+  "mercado_pago": {
+    "payment_id": 1234567890,
+    "status": "approved",
+    "status_detail": "accredited",
+    "installments": 1,
+    "payment_method": { "id": "visa", "type": "credit_card" }
+  },
+  "auto_conexion": {
+    "estado": "no_conectado",
+    "mac": "AA:BB:CC:DD:EE:FF",
+    "mensaje": "No se pudo conectar automáticamente. Use las credenciales para conectar a Internet",
+    "verificado": false
+  }
+}
+```
+
+---
+
+## Error Reference
+
+| HTTP Status | Cause | Rollback? |
+|---|---|---|
+| `404` | Product not found or wrong company | No (user never created) |
+| `400` | MP amount mismatch / MP not configured | No |
+| `402` | Payment declined, expired, cancelled, etc. | ✅ Yes |
+| `500` | MikroTik unreachable / unexpected error | ✅ Yes (if user was created) |
+
+---
+
+## User Type Credential Summary
+
+<CardGroup cols={2}>
+  <Card title="usuario_contrasena" icon="user">
+    **Username:** 6-character alphanumeric (e.g., `AB3C9D`)
+
+    **Password:** Fixed `1234`
+
+    Best for traditional login pages where users type credentials manually.
+  </Card>
+  <Card title="pin" icon="lock">
+    **Username:** 6-character alphanumeric (still generated)
+
+    **Password (PIN):** 6-digit numeric (e.g., `482931`)
+
+    Best for simplified portals with a single PIN entry field.
+  </Card>
+</CardGroup>

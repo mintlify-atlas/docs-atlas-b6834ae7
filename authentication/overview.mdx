@@ -1,0 +1,78 @@
+---
+title: "Authentication Overview: Dual-Auth System"
+sidebarTitle: "Overview"
+description: "Pagos Hotspot API uses two separate authentication systems: JWT API Keys for captive portal requests and JWT session tokens for admin panel access."
+---
+
+Pagos Hotspot API is a multi-tenant service that bridges MikroTik captive portals with card payment processors (Conekta and Mercado Pago). Because it serves two fundamentally different kinds of callers — embedded HTML pages running on customer routers and human operators managing the platform — it uses two entirely separate authentication mechanisms. Understanding which system applies to your use case is the first step before making any API call.
+
+## Two Authentication Mechanisms
+
+Every request to the API must carry exactly one of the two credentials described below. Mixing them (e.g. sending an API Key on an admin endpoint) will return `401 Unauthorized`.
+
+### 1 — Router API Keys (`X-API-Key`)
+
+A **Router API Key** is a signed JWT prefixed with `jwt_`. Each physical MikroTik router is issued exactly one active key at a time. The captive portal HTML page embedded in the router includes the key and sends it as the `X-API-Key` header on every call it makes — fetching the product catalog, initiating a payment, or triggering auto-reconnect.
+
+- **Header:** `X-API-Key: jwt_eyJhbGci...`
+- **Issued by:** Super admin via `POST /admin/empresas/{empresa_id}/routers`
+- **Validity:** 365 days (configurable via `JWT_APIKEY_EXPIRE_DAYS`)
+- **Scope:** Public captive-portal endpoints only — no admin access
+
+### 2 — JWT Session Tokens (`Authorization: Bearer`)
+
+A **JWT Session Token** is issued when an admin user successfully authenticates with their email and password. The token is then sent as a standard Bearer token on every subsequent admin request.
+
+- **Header:** `Authorization: Bearer <token>`
+- **Issued by:** `POST /api/v1/auth/login`
+- **Validity:** 24 hours (configurable via `JWT_SESSION_EXPIRE_HOURS`)
+- **Scope:** Admin panel endpoints only — cannot be used on captive-portal paths
+
+<Note>
+  The two credentials are signed with **different secrets** (`JWT_APIKEY_SECRET` vs `JWT_SESSION_SECRET`) and validated by different code paths. A session token will never be accepted where an API Key is expected, and vice versa.
+</Note>
+
+---
+
+## Roles and Permissions
+
+The platform defines three distinct actor types, each mapped to a specific combination of auth method and capabilities.
+
+| Role | Auth Method | Header | Token Expiry | Responsibilities |
+|---|---|---|---|---|
+| `super_admin` | JWT Session Token | `Authorization: Bearer` | 24 hours | Create companies, routers, and admin users; manage all API keys |
+| `cliente_admin` | JWT Session Token | `Authorization: Bearer` | 24 hours | Manage own products, view transactions, configure Conekta / Mercado Pago |
+| Public (router) | Router API Key | `X-API-Key` | 365 days | Fetch catalog, initiate payments, auto-reconnect — no user account required |
+
+### `super_admin`
+
+The platform operator role. A `super_admin` can perform every privileged action: onboarding new companies (`empresas`), provisioning routers and their API keys, creating `cliente_admin` accounts, and revoking or rotating any key. Each admin endpoint guarded by this role uses the `require_super_admin` FastAPI dependency, which decodes the session JWT and asserts `usuario.rol == "super_admin"`.
+
+### `cliente_admin`
+
+A company-scoped operator. A `cliente_admin` can manage the resources that belong to their own company only: product catalog, pricing, payment gateway credentials, and transaction history. Endpoints guarded by this role use the `require_cliente_admin` dependency.
+
+### Public — Router API Key
+
+End users connecting to a MikroTik hotspot never create an account. The captive portal page authenticates on their behalf using the router's API Key. This grants access to a limited set of public endpoints and automatically scopes every request to the correct `empresa` and `router` based on the claims embedded in the key's JWT payload.
+
+---
+
+## Quick-Start: Pick Your Path
+
+<CardGroup cols={2}>
+  <Card
+    title="Router API Keys"
+    icon="key"
+    href="/authentication/api-keys"
+  >
+    Learn how to obtain, embed, rotate, and revoke the JWT API Keys used by MikroTik captive portal pages.
+  </Card>
+  <Card
+    title="JWT Session Tokens"
+    icon="shield-halved"
+    href="/authentication/jwt-sessions"
+  >
+    Learn how admin users log in, use session tokens on protected endpoints, and manage their credentials.
+  </Card>
+</CardGroup>

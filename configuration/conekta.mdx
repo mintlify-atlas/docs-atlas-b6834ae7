@@ -1,0 +1,177 @@
+---
+title: "Configure Conekta Payment Gateway per Company"
+sidebarTitle: "Conekta"
+description: "Set up Conekta credentials for a company to enable card payment processing on MikroTik Hotspot portals in Mexico."
+---
+
+[Conekta](https://conekta.com) is a Mexico-focused payment processor that supports credit and debit card charges, OXXO cash payments, and bank transfers. The Pagos Hotspot API uses Conekta's Orders API (`POST /orders`) to charge cards tokenized on the captive portal frontend. Because the API is multi-tenant, every company (`Empresa`) stores its own Conekta credentials independently — one company's keys are completely isolated from another's.
+
+---
+
+## How credentials are stored
+
+Each `Empresa` record in the database holds three Conekta-related fields:
+
+| Field | Column type | Description |
+|---|---|---|
+| `conekta_private_key` | `String(100)` | Server-side key used to authenticate API requests to `api.conekta.io` |
+| `conekta_public_key` | `String(100)` | Client-side key embedded in the captive portal to tokenize card data |
+| `conekta_mode` | `String(10)` | `"test"` or `"live"` — controls which Conekta environment is used |
+
+<Note>
+  When you retrieve the current configuration via `GET /api/v1/admin/mi-empresa/conekta`,
+  the `conekta_private_key` field is always masked as `"********"` in the
+  response body. The actual key is never returned through the API.
+</Note>
+
+---
+
+## Setting Conekta credentials
+
+There are two equivalent endpoints for saving credentials. Both accept the same request body and require a valid **client-admin session token**.
+
+### Option A — New endpoint (recommended)
+
+```http
+POST /api/v1/admin/mi-empresa/configurar-conekta
+```
+
+### Option B — Legacy endpoint
+
+```http
+PUT /api/v1/admin/mi-empresa/conekta-config
+```
+
+**Request body fields:**
+
+<ParamField body="conekta_private_key" type="string">
+  Your Conekta private key. Test keys begin with `sk_test_`; live keys begin
+  with `sk_live_`. If omitted or `null`, the stored value is left unchanged.
+</ParamField>
+
+<ParamField body="conekta_public_key" type="string">
+  Your Conekta public key. Test keys begin with `pk_test_`; live keys begin
+  with `pk_live_`. If omitted or `null`, the stored value is left unchanged.
+</ParamField>
+
+<ParamField body="conekta_mode" type="string" default="test">
+  Operating mode. Accepted values: `"test"` or `"live"`. This field is always
+  updated when the request is made; it defaults to `"test"` if not provided.
+</ParamField>
+
+<CodeGroup>
+
+```bash Configure credentials (new endpoint)
+curl -X POST https://api.example.com/api/v1/admin/mi-empresa/configurar-conekta \
+  -H "Authorization: Bearer <session_token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "conekta_private_key": "sk_test_xxxxxxxxxxxxxxxxxx",
+    "conekta_public_key": "pk_test_xxxxxxxxxxxxxxxxxx",
+    "conekta_mode": "test"
+  }'
+```
+
+```bash Configure credentials (legacy endpoint)
+curl -X PUT https://api.example.com/api/v1/admin/mi-empresa/conekta-config \
+  -H "Authorization: Bearer <session_token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "conekta_private_key": "sk_live_xxxxxxxxxxxxxxxxxx",
+    "conekta_public_key": "pk_live_xxxxxxxxxxxxxxxxxx",
+    "conekta_mode": "live"
+  }'
+```
+
+</CodeGroup>
+
+**Successful response:**
+
+```json
+{
+  "message": "Credenciales de Conekta actualizadas correctamente"
+}
+```
+
+---
+
+## Retrieving current configuration
+
+```http
+GET /api/v1/admin/mi-empresa/conekta
+```
+
+Returns the current Conekta configuration for the authenticated company. The private key is masked.
+
+```bash
+curl https://api.example.com/api/v1/admin/mi-empresa/conekta \
+  -H "Authorization: Bearer <session_token>"
+```
+
+**Response:**
+
+```json
+{
+  "message": "Configuración cargada",
+  "configuracion_actual": {
+    "conekta_public_key": "pk_test_xxxxxxxxxxxxxxxxxx",
+    "conekta_mode": "test",
+    "conekta_private_key": "********"
+  }
+}
+```
+
+---
+
+## Exposing the public key to the captive portal
+
+The captive portal frontend needs the public key to tokenize card data in the browser using `ConektaJS`. The public key is included in the public configuration endpoint that does not require authentication:
+
+```http
+GET /api/v1/config/public
+```
+
+The relevant field in the response is `empresa.conekta_public_key`. Your portal should call this endpoint at load time and pass the key to `Conekta.setPublicKey()`.
+
+```javascript
+const config = await fetch('/api/v1/config/public').then(r => r.json());
+Conekta.setPublicKey(config.empresa.conekta_public_key);
+```
+
+---
+
+## Test cards
+
+When `conekta_mode` is set to `"test"`, use the following card numbers to simulate different scenarios without charging real cards.
+
+| Card number | Network | CVV | Expiry | Result |
+|---|---|---|---|---|
+| `4242 4242 4242 4242` | Visa | `123` | Any future date | Approved |
+| `4000 0000 0000 0002` | Visa | `123` | Any future date | Declined |
+| `5555 5555 5555 4444` | Mastercard | `123` | Any future date | Approved |
+
+<Warning>
+  Test tokens are **single-use**. A `conekta.errors.processing.tokenization.used`
+  error is returned if you attempt to reuse a token. Always generate a fresh
+  token for each payment attempt in your portal.
+</Warning>
+
+---
+
+## Switching to live mode
+
+<Steps>
+  <Step title="Obtain live credentials from Conekta">
+    Log in to the [Conekta dashboard](https://app.conekta.com), navigate to
+    **Developers → API Keys**, and create or copy your live private and public
+    keys (prefixed `sk_live_` and `pk_live_`).
+  </Step>
+  <Step title="Update credentials via the API">
+    Call `POST /api/v1/admin/mi-empresa/configurar-conekta` with the live keys
+    and `"conekta_mode": "live"`.
+  </Step>
+  <Step title="Verify with a real transaction">
+    Process a small real transaction through the captive portal to confirm
+    end-to-end connectivity. Check the Conekta dashboard for the order record.
+  </Step>
+</Steps>
