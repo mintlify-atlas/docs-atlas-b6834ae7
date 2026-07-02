@@ -83,7 +83,7 @@ Content-Type: application/json
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `username` | `string` | ✅ | The hotspot username saved in `localStorage` |
-| `password` | `string` | ✅ | The hotspot password (can be empty for PIN-only users) |
+| `password` | `string` | ❌ | The hotspot password; defaults to empty string for PIN-only users |
 | `stored_mac` | `string` | ❌ | The MAC address saved when the user first purchased |
 | `current_mac` | `string` | ✅ | The device's current MAC address |
 | `current_ip` | `string` | ❌ | The device's current IP address |
@@ -172,6 +172,9 @@ Content-Type: application/json
 | `auto_conexion` | `string` | `"conectado"` or `"no_conectado"` |
 | `datos_sesion` | `object \| null` | Active session info (user, address, uptime, bytes) if connected |
 | `nueva_mac` | `string \| null` | The `current_mac` that was processed |
+| `tiempo_acumulado` | `string \| null` | Total accumulated uptime for the user's session |
+| `tiempo_restante` | `string \| null` | Remaining time on the active session limit |
+| `primera_sesion` | `string \| null` | Timestamp of the user's first session |
 | `mensaje` | `string \| null` | Human-readable status message |
 | `error_detalle` | `string \| null` | Internal error detail (only present on errors) |
 | `timestamp` | `string` | ISO 8601 UTC timestamp of the response |

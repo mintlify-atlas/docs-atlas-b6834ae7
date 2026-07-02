@@ -112,7 +112,7 @@ The auto-reconnect endpoint re-authenticates a customer who has already paid and
 
 ## Reconnect Flow
 
-```
+```text
 1. Decode URL-encoded username and current_mac
 2. Check empresa.activa and router.activo → return early if inactive
 3. If username looks like a MAC address → return estado: "expirado"

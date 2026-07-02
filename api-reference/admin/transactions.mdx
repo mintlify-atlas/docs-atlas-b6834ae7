@@ -1,7 +1,7 @@
 ---
-title: "Transaction History and Dashboard Endpoints"
+title: "Transaction History and Dashboard Endpoints for Admins"
 sidebarTitle: "Transactions"
-description: "Access paginated transaction history and company dashboard stats showing total revenue, payment counts, and recent activity."
+description: "Access paginated transaction history and company dashboard stats showing total revenue, payment counts, hotspot states, and recent activity."
 ---
 
 Transactions are created automatically when a customer completes (or attempts) a payment through the captive portal. These read-only endpoints give client admins visibility into payment activity, revenue totals, and recent events — without requiring access to the payment gateway dashboard.
@@ -214,6 +214,108 @@ curl -X GET "https://api.example.com/api/v1/admin/mi-empresa/dashboard" \
   ]
 }
 ```
+
+---
+
+## Transaccion Model Fields
+
+All transaction objects stored in the `transacciones` table share the following columns. The list endpoint returns only a subset (see above); the full schema is documented here for reference.
+
+<ResponseField name="id" type="integer" required>
+  Auto-incremented internal database ID.
+</ResponseField>
+
+<ResponseField name="transaccion_id" type="string">
+  Unique transaction reference string generated at payment creation. For Conekta this is the Order ID (e.g. `"ord_2xxxxxxxxxxxxxb"`); for Mercado Pago it is derived from the preference or payment ID. Unique across the platform.
+</ResponseField>
+
+<ResponseField name="external_reference" type="string">
+  External reference string used as the correlation key in payment gateway webhooks. Unique across the platform.
+</ResponseField>
+
+<ResponseField name="empresa_id" type="string" required>
+  ID of the company that owns this transaction (e.g. `"EMP_3A9F1C0B2D"`).
+</ResponseField>
+
+<ResponseField name="router_id" type="string" required>
+  ID of the router through which the hotspot session is granted (e.g. `"RTR_A1B2C3D4"`).
+</ResponseField>
+
+<ResponseField name="producto_id" type="integer">
+  ID of the product (plan) the customer purchased. May be `null` for legacy transactions created before products were introduced.
+</ResponseField>
+
+<ResponseField name="monto" type="number" required>
+  Transaction amount as a decimal, e.g. `50.00`.
+</ResponseField>
+
+<ResponseField name="moneda" type="string">
+  ISO 4217 currency code. Defaults to `"MXN"`.
+</ResponseField>
+
+<ResponseField name="cliente_nombre" type="string">
+  Customer full name collected at checkout. `null` if not captured.
+</ResponseField>
+
+<ResponseField name="cliente_email" type="string">
+  Customer email address. `null` if not captured.
+</ResponseField>
+
+<ResponseField name="cliente_telefono" type="string">
+  Customer phone number. `null` if not captured.
+</ResponseField>
+
+<ResponseField name="usuario_hotspot" type="string">
+  MikroTik Hotspot username generated for the customer upon successful payment. `null` before payment is confirmed.
+</ResponseField>
+
+<ResponseField name="password_hotspot" type="string">
+  MikroTik Hotspot password paired with `usuario_hotspot`. `null` before payment is confirmed.
+</ResponseField>
+
+<ResponseField name="expiracion_hotspot" type="string (ISO 8601)">
+  Timestamp when the hotspot session will expire. Derived from the MikroTik profile's `session_timeout`. `null` before the hotspot user is created.
+</ResponseField>
+
+<ResponseField name="estado_pago" type="string">
+  Payment gateway state. See [Payment States](#payment-states) below. Defaults to `"pending"`.
+</ResponseField>
+
+<ResponseField name="estado_hotspot" type="string">
+  State of the hotspot user creation step. `"pending"` until the webhook is processed; set to `"created"` once the MikroTik user is created, or `"failed"` if creation failed. Defaults to `"pending"`.
+</ResponseField>
+
+<ResponseField name="webhook_processed" type="boolean">
+  `true` once the payment gateway webhook has been received and processed. Defaults to `false`.
+</ResponseField>
+
+<ResponseField name="notification_id" type="string">
+  Mercado Pago notification ID from the incoming webhook payload. Used for idempotency. `null` for Conekta transactions.
+</ResponseField>
+
+<ResponseField name="metadata_json" type="object">
+  Arbitrary JSON metadata attached to the transaction. Contains gateway-specific raw response data. Stored as JSONB.
+</ResponseField>
+
+<ResponseField name="api_key_usada" type="string">
+  SHA-256 hash (first 64 chars) of the router API key that was used to create this transaction. Used for auditing.
+</ResponseField>
+
+<ResponseField name="creada_en" type="string (ISO 8601)">
+  Timestamp when the transaction record was inserted. Defaults to `CURRENT_TIMESTAMP`.
+</ResponseField>
+
+<ResponseField name="pagada_en" type="string (ISO 8601)">
+  Timestamp when the payment was confirmed by the gateway webhook. `null` until payment is confirmed.
+</ResponseField>
+
+<ResponseField name="usuario_creado_en" type="string (ISO 8601)">
+  Timestamp when the MikroTik hotspot user was created. `null` until the hotspot step completes.
+</ResponseField>
+
+<ResponseField name="webhook_received_at" type="string (ISO 8601)">
+  Timestamp when the payment gateway webhook was received by the API server. `null` if no webhook has been received yet.
+</ResponseField>
 
 ---
 

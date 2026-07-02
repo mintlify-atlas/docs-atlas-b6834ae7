@@ -1,7 +1,7 @@
 ---
 title: "GET /api/v1/catalogo_perfiles_venta — Product Catalog"
 sidebarTitle: "Catalog"
-description: "Lists all active Hotspot products for the authenticated router, ordered by visual order and featured status."
+description: "Returns active WiFi access plans for the router sorted by visual order and featured flag, with price, MikroTik profile name, and JSON detail bullets."
 ---
 
 The product catalog endpoints return the WiFi access plans available for purchase through the captive portal. Each product maps directly to a MikroTik Hotspot profile, and carries all the information needed to render a pricing card in the frontend — including price, description, an optional image, and configurable detail bullets. Products are filtered by company and router, so only plans assigned to the authenticated router are returned.

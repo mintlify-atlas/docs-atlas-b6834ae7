@@ -12,7 +12,7 @@ Every MikroTik router registered on the platform is issued a dedicated **Router 
 
 A Router API Key is a standard HS256-signed JWT prefixed with the literal string `jwt_`:
 
-```
+```text
 jwt_eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiJrZXlfYWJjZDEyMzQ1...
 ```
 
@@ -93,15 +93,15 @@ The following claims are embedded in every Router API Key at issuance (from `gen
   </Step>
 
   <Step title="Send the key on every captive-portal request">
-    Pass the full key (including the `jwt_` prefix) in the `X-API-Key` header:
+    Pass the full key (including the `jwt_` prefix) in the `Authorization: Bearer` header:
 
     ```bash
     curl -X GET https://api.example.com/api/v1/catalog \
-      -H "X-API-Key: jwt_eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+      -H "Authorization: Bearer jwt_eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
     ```
 
     The API will:
-    1. Check the `jwt_` prefix.
+    1. Check that the credential starts with `jwt_`.
     2. Strip the prefix and decode the JWT using `JWT_APIKEY_SECRET`.
     3. Compute `SHA256(raw_jwt)` and look up the hash in the `api_keys_tracking` table.
     4. Confirm the record exists, `revoked == false`, and the token is not expired.
@@ -113,9 +113,9 @@ The following claims are embedded in every Router API Key at issuance (from `gen
 
 ## Validation Logic
 
-When the API receives a request with an `X-API-Key` header, `AuthHandler.authenticate_api_key` (in `app/core/auth.py`) performs the following checks in order:
+When the API receives a request carrying a `jwt_`-prefixed credential, `AuthHandler.authenticate_api_key` (in `app/core/auth.py`) performs the following checks in order:
 
-1. **Prefix check** — The value must start with `jwt_`. Any other format returns `401 Formato de API Key inválido`.
+1. **Prefix check** — The credential must start with `jwt_`. Any other format returns `401 Formato de API Key inválido`.
 2. **JWT signature & expiry** — The stripped token is decoded with `JWT_APIKEY_SECRET`. An expired token returns `401 API Key expirada`; a tampered token returns `401 API Key inválida`.
 3. **Tracking lookup** — `SHA256(raw_jwt)` is computed and matched against the `key_hash` column in `api_keys_tracking`. If no non-revoked record is found, the request is rejected with `401 API Key no válida o revocada`.
 4. **Company active check** — The associated `Empresa` must exist and have `activa == true`.

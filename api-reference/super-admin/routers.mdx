@@ -1,7 +1,7 @@
 ---
-title: "Super Admin: Router and API Key Management"
+title: "Super Admin: Router and API Key Management Endpoints"
 sidebarTitle: "Routers"
-description: "Super admin endpoints to create routers, manage their API Keys (generate, revoke, rotate), and monitor key usage and expiry."
+description: "Super admin endpoints to create routers for tenant companies, generate and rotate JWT API Keys, revoke compromised keys, and monitor key expiry and usage."
 ---
 
 Routers are the physical MikroTik devices that serve as WiFi hotspot gateways for each tenant company. When a router is created, the API automatically generates a **JWT-based API Key** (prefixed with `jwt_`) that the captive portal uses to authenticate payment and hotspot creation requests. The full API Key is only returned at creation or regeneration time — it is never stored in plain text.

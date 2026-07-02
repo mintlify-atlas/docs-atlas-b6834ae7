@@ -1,7 +1,7 @@
 ---
 title: "GET /api/v1/config/public — Public Configuration"
 sidebarTitle: "Public Config"
-description: "Returns public configuration for the captive portal, including Conekta and Mercado Pago public keys, and router metadata."
+description: "Returns public Conekta and Mercado Pago API keys plus company and router metadata needed to initialize the captive portal frontend."
 ---
 
 The `/api/v1/config/public` endpoint is the first call a captive portal frontend should make after loading. It returns the public API keys needed to initialize Conekta.js and the Mercado Pago SDK in the browser, along with human-readable metadata about the company and the router serving the portal. All sensitive private keys remain server-side and are never exposed through this endpoint.

@@ -1,5 +1,5 @@
 ---
-title: "JWT Session Tokens for Admin Panel Access"
+title: "JWT Session Tokens for Admin Panel Access and Auth"
 sidebarTitle: "JWT Sessions"
 description: "Admin panel users authenticate with email and password to receive a 24-hour JWT session token. Covers login, logout, and password management."
 ---
@@ -7,7 +7,7 @@ description: "Admin panel users authenticate with email and password to receive 
 Admin panel access — whether you are a platform operator (`super_admin`) or a company operator (`cliente_admin`) — is protected by short-lived JWT session tokens. You exchange your email and password for a token at login, include that token as a Bearer credential on every subsequent request, and re-authenticate when it expires. This page covers the complete session lifecycle: login, authenticated requests, password changes, logout, and how role enforcement works under the hood.
 
 <Note>
-  JWT session tokens are completely separate from Router API Keys. Session tokens are scoped to human admin users and travel in the `Authorization: Bearer` header. Router API Keys are scoped to MikroTik hardware and travel in the `X-API-Key` header. The two credentials are signed with different secrets and validated by different code paths — one cannot substitute for the other.
+  JWT session tokens are completely separate from Router API Keys. Session tokens are scoped to human admin users and travel in the `Authorization: Bearer` header without a prefix. Router API Keys are scoped to MikroTik hardware and also travel in the `Authorization: Bearer` header but carry a `jwt_` prefix before the encoded JWT. The two credentials are signed with different secrets (`JWT_SESSION_SECRET` vs `JWT_APIKEY_SECRET`) and validated by different code paths — one cannot substitute for the other.
 </Note>
 
 ---
@@ -40,12 +40,21 @@ curl -X POST https://api.example.com/api/v1/auth/login \
 
 ```json
 {
-  "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMiIsInJvbCI6InN1cGVyX2FkbWluIiwiZXhwIjoxNzA5MDcyODAwLCJpYXQiOjE3MDg5ODY0MDAsInR5cGUiOiJhY2Nlc3NfdG9rZW4ifQ...",
-  "token_type": "bearer"
+  "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+  "token_type": "bearer",
+  "expires_at": "2024-01-16T10:30:00",
+  "user": {
+    "id": 12,
+    "email": "admin@empresa.com",
+    "nombre": "Admin Empresa",
+    "rol": "cliente_admin",
+    "empresa_id": "EMP_ABC123",
+    "activo": true
+  }
 }
 ```
 
-The `access_token` is an HS256-signed JWT. Store it securely in your admin client (e.g. `localStorage`, an in-memory store, or an `HttpOnly` cookie). It is valid for **24 hours** from the moment of issuance (controlled by the `JWT_SESSION_EXPIRE_HOURS` environment variable, which defaults to `24`).
+The `access_token` is an HS256-signed JWT containing the claims `sub` (user integer ID), `email`, `nombre`, `rol`, `empresa_id`, `iat` (issued-at Unix timestamp), `exp` (expiry Unix timestamp), and `type: "access_token"`. Store it securely in your admin client (e.g. `localStorage`, an in-memory store, or an `HttpOnly` cookie). It is valid for **24 hours** from the moment of issuance (controlled by the `JWT_SESSION_EXPIRE_HOURS` environment variable, which defaults to `24`).
 
 ---
 

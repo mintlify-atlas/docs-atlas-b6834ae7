@@ -1,7 +1,7 @@
 ---
-title: "POST /api/v1/payments/pagar-mercado-pago — Mercado Pago Payment"
+title: "POST /api/v1/payments/pagar-mercado-pago — MercadoPago"
 sidebarTitle: "Mercado Pago Payment"
-description: "Process a Mercado Pago card payment, create a MikroTik Hotspot user, and return credentials with optional Telegram notification."
+description: "Process a Mercado Pago card payment, create a MikroTik Hotspot user, and return WiFi credentials with optional Telegram operator notification."
 ---
 
 The Mercado Pago payment endpoints provide the same hotspot-provisioning experience as the Conekta flow, but using Mercado Pago as the payment processor. The frontend tokenizes card data using the Mercado Pago JS SDK and submits the resulting token along with card metadata to this endpoint. The server creates the MikroTik hotspot user first, then charges the card — rolling back the user if the charge fails. On success, optional Telegram notifications can be sent to the operator's configured chat.

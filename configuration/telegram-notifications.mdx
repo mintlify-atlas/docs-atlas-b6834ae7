@@ -1,7 +1,7 @@
 ---
-title: "Telegram Payment Notifications Setup"
+title: "Configure Telegram Bot for Real-Time Payment Notifications"
 sidebarTitle: "Telegram"
-description: "Configure a Telegram bot to receive instant payment approval and rejection alerts for each company's transactions."
+description: "Set up a per-company Telegram bot to receive instant payment approval and rejection alerts for Conekta and Mercado Pago transactions."
 ---
 
 Telegram notifications are an optional per-company feature that delivers real-time payment alerts directly to a Telegram chat or group. When enabled, the API sends a formatted HTML message every time a payment is **approved** or **rejected** through either Conekta or Mercado Pago. This gives business owners and operators immediate visibility into sales activity without needing to check a dashboard.
@@ -139,7 +139,7 @@ curl -X POST https://api.example.com/api/v1/admin/test-telegram \
 
 The bot sends the following test message to the chat:
 
-```
+```text
 ⚡ Prueba de Conexión en Vivo
 🏢 Empresa: Mi Empresa
 ✅ ¡Tus credenciales son correctas!
@@ -157,7 +157,7 @@ All messages are sent via the [Telegram Bot API](https://core.telegram.org/bots/
 
 Sent after a successful charge on either Conekta or Mercado Pago.
 
-```
+```text
 ✅ ¡Pago Aprobado!
 🏢 Empresa: Mi Empresa
 📦 Plan: Internet 1 Hora
@@ -171,7 +171,7 @@ Sent after a successful charge on either Conekta or Mercado Pago.
 
 For **PIN-type** users the credentials section is simplified:
 
-```
+```text
 🔑 PIN: 49302
 ```
 
@@ -179,7 +179,7 @@ For **PIN-type** users the credentials section is simplified:
 
 Sent when a payment is declined (HTTP `402` response from the payment gateway).
 
-```
+```text
 ❌ Pago Rechazado
 🏢 Empresa: Mi Empresa
 📦 Plan: Internet 1 Hora

@@ -102,11 +102,17 @@ import hmac
 import hashlib
 
 def verify_signature(x_signature: str, x_request_id: str, data_id: str, secret: str) -> bool:
-    parts = {p.split('=')[0]: p.split('=')[1] for p in x_signature.split(',')}
+    parts = dict(p.split('=', 1) for p in x_signature.split(','))
     timestamp = parts.get('ts')
     received_hash = parts.get('v1')
+    if not timestamp or not received_hash:
+        return False
     message = f"id:{data_id};request-id:{x_request_id};ts:{timestamp};"
-    expected = hmac.new(secret.encode(), message.encode(), hashlib.sha256).hexdigest()
+    expected = hmac.new(
+        secret.encode('utf-8'),
+        message.encode('utf-8'),
+        hashlib.sha256
+    ).hexdigest()
     return hmac.compare_digest(expected, received_hash)
 ```
 
@@ -143,7 +149,7 @@ def verify_signature(x_signature: str, x_request_id: str, data_id: str, secret: 
     The empresa's `mercado_pago_access_token` is decrypted and used to call `mercado_pago_service.get_payment_status(access_token, payment_id)`. This is the authoritative status from Mercado Pago — not just the status in the webhook body.
   </Step>
   <Step title="Background: update transaction record">
-    `transaction.estado_pago` is set to the real status returned by the API call (e.g. `"approved"`, `"pending"`, `"rejected"`). If the status is `"approved"` and `pagada_en` is `null`, it is set to the current UTC timestamp. The `notification_id`, `webhook_processed`, and `webhook_received_at` fields are also updated. A webhook history entry is appended to `metadata_json.webhooks`, and the `notification_id` is recorded in `metadata_json.processed_notifications`. The database transaction is committed.
+    `transaction.estado_pago` is set to the real status returned by the API call (e.g. `"approved"`, `"pending"`, `"rejected"`). If the status is `"approved"` and `pagada_en` is `null`, it is set to the current UTC timestamp. The `notification_id`, `webhook_processed`, and `webhook_received_at` fields are also updated. A `last_webhook` summary and the `notification_id` are recorded in `metadata_json`. The database transaction is committed.
   </Step>
 </Steps>
 
@@ -160,7 +166,7 @@ The following `Transaccion` model fields are written during webhook processing:
 | `notification_id` | `VARCHAR(100)` | Stores the Mercado Pago notification `id` from the webhook payload. |
 | `webhook_processed` | `BOOLEAN` | Set to `true` after the background task runs successfully. |
 | `webhook_received_at` | `TIMESTAMP` | Set to the UTC timestamp when the background processing task ran. |
-| `metadata_json` | `JSONB` | Extended with webhook history. See structure below. |
+| `metadata_json` | `JSONB` | Updated with a `last_webhook` summary and the current notification ID appended to `processed_notifications`. |
 
 **`metadata_json` structure after processing:**
 
@@ -175,16 +181,6 @@ The following `Transaccion` model fields are written during webhook processing:
   },
   "processed_notifications": [
     "1234567890"
-  ],
-  "webhooks": [
-    {
-      "notification_id": "1234567890",
-      "received_at": "2025-01-01T12:00:00.000000",
-      "old_status": "pending",
-      "new_status": "approved",
-      "status_detail": "accredited",
-      "date_last_updated": "2025-01-01T12:00:00.000-04:00"
-    }
   ]
 }
 ```

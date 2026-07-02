@@ -1,5 +1,5 @@
 ---
-title: "Configure Mercado Pago Credentials and Webhooks"
+title: "Configure Mercado Pago Credentials and Encryption Keys"
 sidebarTitle: "Mercado Pago"
 description: "Connect Mercado Pago to your company account for LATAM card processing, including access token setup, webhook secret configuration, and test mode."
 ---
@@ -183,7 +183,7 @@ Both `access_token` and `webhook_secret` are always masked in GET responses.
 
 The API exposes a **single global webhook endpoint** that handles notifications for all companies:
 
-```
+```http
 POST /api/v1/webhook/mercado-pago
 ```
 

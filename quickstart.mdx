@@ -1,7 +1,7 @@
 ---
-title: "Get Started with Pagos Hotspot API in 5 Minutes"
+title: "Pagos Hotspot API Quickstart: First Payment in 5 Minutes"
 sidebarTitle: "Quickstart"
-description: "Send your first payment request and receive MikroTik Hotspot credentials in under 5 minutes using curl or the API sandbox."
+description: "Send your first payment request and receive MikroTik Hotspot user credentials in under 5 minutes using curl or the interactive sandbox."
 ---
 
 This guide walks you through the minimal end-to-end flow: fetching the product catalog, submitting a card payment, and extracting the MikroTik Hotspot credentials from the response. You'll need a running server and a valid router API Key — if you haven't set those up yet, follow the [Installation guide](/installation) first.
@@ -95,6 +95,7 @@ curl -s -X POST https://your-api.example.com/api/v1/payments/pagar-conekta \
 | `telefono_cliente` | string | No | Customer phone number |
 | `mac_cliente` | string | No | Device MAC address for auto-connect |
 | `ip_cliente` | string | No | Device IP address for auto-connect |
+| `info_dispositivo` | string | No | Free-form device description or user-agent string |
 | `conexion_automatica` | boolean | No | Attempt MAC auto-login (default: `false`) |
 | `tipo_usuario` | string | No | `"usuario_contrasena"` (default) or `"pin"` |
 

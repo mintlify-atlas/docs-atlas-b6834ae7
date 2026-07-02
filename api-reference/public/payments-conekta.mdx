@@ -1,7 +1,7 @@
 ---
 title: "POST /api/v1/payments/pagar-conekta — Conekta Payment"
 sidebarTitle: "Conekta Payment"
-description: "Process a Conekta card payment, create a MikroTik Hotspot user, and return credentials. Supports auto-connection via MAC address."
+description: "Process a Conekta card payment, create a MikroTik Hotspot user, and return WiFi credentials. Supports MAC-based auto-connection after a successful charge."
 ---
 
 The `/api/v1/payments/pagar-conekta` endpoint is the core transaction flow for Conekta-powered captive portals. It accepts a Conekta.js card token from the browser, creates a MikroTik Hotspot user with the appropriate profile, charges the card, and returns ready-to-use WiFi credentials. The entire process is atomic from the user's perspective — if the payment is declined or fails, the hotspot user is immediately deleted so no access is granted without a successful charge.
@@ -183,7 +183,7 @@ On success the endpoint returns `HTTP 200` with the following JSON body.
 
 ## Payment Flow
 
-```
+```text
 1. Validate product belongs to the authenticated company
 2. Normalize user_type → "usuario_contrasena" or "pin"
 3. Generate hotspot credentials (username + password or PIN)

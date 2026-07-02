@@ -1,7 +1,7 @@
 ---
-title: "Configure MikroTik Router Connection Credentials"
+title: "Configure MikroTik Router Credentials for Hotspot Access"
 sidebarTitle: "MikroTik"
-description: "Add MikroTik router credentials to enable automatic Hotspot user creation, MAC cookie injection, and real-time profile retrieval."
+description: "Add MikroTik router credentials to enable automatic Hotspot user creation, profile retrieval, and MAC cookie injection after card payments."
 ---
 
 The Pagos Hotspot API communicates directly with MikroTik routers over the RouterOS API protocol (port 8728 for plain TCP, port 8729 for SSL/TLS). After a card payment is approved, the API calls `POST /ip/hotspot/user/add` on the router to create a Hotspot user with a generated username and password (or PIN), then returns those credentials to the paying customer so they can connect to the WiFi portal immediately. Each router is registered in the database with the connection details needed to establish that live session.
@@ -179,14 +179,18 @@ curl https://api.example.com/api/v1/admin/routers/abc123/test-connection \
 ```json
 {
   "success": true,
-  "connected": true,
+  "message": "Conexión exitosa",
+  "router": {
+    "id": "RTR_ABC12345",
+    "nombre": "Sucursal Centro",
+    "host": "192.168.88.1",
+    "puerto": 8728,
+    "activo": true
+  },
+  "perfiles_encontrados": 4,
   "router_name": "MikroTik-Sucursal-Centro",
-  "profiles_count": 4,
-  "profiles_sample": [
-    { "id": "*1", "name": "default" },
-    { "id": "*2", "name": "1hora" },
-    { "id": "*3", "name": "1dia" }
-  ]
+  "error": null,
+  "timestamp": "2024-01-15T10:30:00.123456"
 }
 ```
 
@@ -195,8 +199,16 @@ curl https://api.example.com/api/v1/admin/routers/abc123/test-connection \
 ```json
 {
   "success": false,
+  "message": "Error de conexión",
+  "router": {
+    "id": "RTR_ABC12345",
+    "nombre": "Sucursal Centro",
+    "host": "192.168.88.1",
+    "puerto": 8728,
+    "activo": true
+  },
   "error": "No se pudo conectar al router: Timeout al conectar a 192.168.88.1:8728",
-  "connected": false
+  "timestamp": "2024-01-15T10:30:00.123456"
 }
 ```
 

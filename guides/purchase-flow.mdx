@@ -1,7 +1,7 @@
 ---
-title: "End-to-End Hotspot Purchase Flow"
+title: "End-to-End Hotspot Purchase Flow for MikroTik WiFi"
 sidebarTitle: "Purchase Flow"
-description: "Walk through the complete payment lifecycle: catalog fetch, card tokenization, payment processing, MikroTik user creation, and automatic rollback on failure."
+description: "Walk through the complete payment lifecycle: catalog fetch, card tokenization, payment processing, MikroTik user creation, and rollback on failure."
 ---
 
 When a customer connects to a MikroTik captive portal and wants to buy internet access, the Pagos Hotspot API orchestrates a precise sequence of events: it creates the MikroTik user **before** charging the card, then validates the payment status with a double check, and automatically rolls back the router user if anything fails. This document walks through every step of that lifecycle for both Conekta and Mercado Pago.
@@ -114,6 +114,7 @@ Content-Type: application/json
 | `card_token` | ✅ | Token from Conekta.js |
 | `customer_name` | ✅ | Customer full name |
 | `customer_email` | ✅ | Valid email address |
+| `customer_phone` | ❌ | Customer phone number |
 | `user_type` | ❌ | `"usuario_contrasena"` (default) or `"pin"` |
 | `mac_address` | ❌ | Device MAC for auto-connect |
 | `ip_address` | ❌ | Device IP for auto-connect |

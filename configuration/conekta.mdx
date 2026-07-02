@@ -1,7 +1,7 @@
 ---
-title: "Configure Conekta Payment Gateway per Company"
+title: "Configure Conekta Payment Gateway for Each Company"
 sidebarTitle: "Conekta"
-description: "Set up Conekta credentials for a company to enable card payment processing on MikroTik Hotspot portals in Mexico."
+description: "Set up per-company Conekta API keys to enable credit and debit card payment processing on MikroTik Hotspot captive portals in Mexico."
 ---
 
 [Conekta](https://conekta.com) is a Mexico-focused payment processor that supports credit and debit card charges, OXXO cash payments, and bank transfers. The Pagos Hotspot API uses Conekta's Orders API (`POST /orders`) to charge cards tokenized on the captive portal frontend. Because the API is multi-tenant, every company (`Empresa`) stores its own Conekta credentials independently — one company's keys are completely isolated from another's.

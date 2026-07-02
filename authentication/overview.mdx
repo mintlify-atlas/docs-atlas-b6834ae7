@@ -1,5 +1,5 @@
 ---
-title: "Authentication Overview: Dual-Auth System"
+title: "Authentication Overview: Pagos Hotspot Dual-Auth System"
 sidebarTitle: "Overview"
 description: "Pagos Hotspot API uses two separate authentication systems: JWT API Keys for captive portal requests and JWT session tokens for admin panel access."
 ---
@@ -10,11 +10,11 @@ Pagos Hotspot API is a multi-tenant service that bridges MikroTik captive portal
 
 Every request to the API must carry exactly one of the two credentials described below. Mixing them (e.g. sending an API Key on an admin endpoint) will return `401 Unauthorized`.
 
-### 1 — Router API Keys (`X-API-Key`)
+### 1 — Router API Keys (`Authorization: Bearer jwt_…`)
 
-A **Router API Key** is a signed JWT prefixed with `jwt_`. Each physical MikroTik router is issued exactly one active key at a time. The captive portal HTML page embedded in the router includes the key and sends it as the `X-API-Key` header on every call it makes — fetching the product catalog, initiating a payment, or triggering auto-reconnect.
+A **Router API Key** is a signed JWT prefixed with `jwt_`. Each physical MikroTik router is issued exactly one active key at a time. The captive portal HTML page embedded in the router includes the key and sends it in the `Authorization: Bearer` header on every call it makes — fetching the product catalog, initiating a payment, or triggering auto-reconnect. The server identifies it as an API Key (rather than a session token) by checking that the credential starts with `jwt_`.
 
-- **Header:** `X-API-Key: jwt_eyJhbGci...`
+- **Header:** `Authorization: Bearer jwt_eyJhbGci...`
 - **Issued by:** Super admin via `POST /admin/empresas/{empresa_id}/routers`
 - **Validity:** 365 days (configurable via `JWT_APIKEY_EXPIRE_DAYS`)
 - **Scope:** Public captive-portal endpoints only — no admin access
@@ -29,7 +29,7 @@ A **JWT Session Token** is issued when an admin user successfully authenticates 
 - **Scope:** Admin panel endpoints only — cannot be used on captive-portal paths
 
 <Note>
-  The two credentials are signed with **different secrets** (`JWT_APIKEY_SECRET` vs `JWT_SESSION_SECRET`) and validated by different code paths. A session token will never be accepted where an API Key is expected, and vice versa.
+  The two credentials are signed with **different secrets** (`JWT_APIKEY_SECRET` vs `JWT_SESSION_SECRET`) and validated by different code paths. A session token will never be accepted where an API Key is expected, and vice versa. API Keys are distinguished by the `jwt_` prefix that precedes the encoded JWT; session tokens carry no such prefix.
 </Note>
 
 ---
@@ -42,7 +42,7 @@ The platform defines three distinct actor types, each mapped to a specific combi
 |---|---|---|---|---|
 | `super_admin` | JWT Session Token | `Authorization: Bearer` | 24 hours | Create companies, routers, and admin users; manage all API keys |
 | `cliente_admin` | JWT Session Token | `Authorization: Bearer` | 24 hours | Manage own products, view transactions, configure Conekta / Mercado Pago |
-| Public (router) | Router API Key | `X-API-Key` | 365 days | Fetch catalog, initiate payments, auto-reconnect — no user account required |
+| Public (router) | Router API Key | `Authorization: Bearer jwt_…` | 365 days | Fetch catalog, initiate payments, auto-reconnect — no user account required |
 
 ### `super_admin`
 
